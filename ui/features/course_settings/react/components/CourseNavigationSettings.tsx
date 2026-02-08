@@ -36,6 +36,7 @@ import {
   IconPlusSolid,
   IconUpdownLine,
   IconLinkLine,
+  IconTrashLine,
 } from '@instructure/ui-icons'
 import {Menu} from '@instructure/ui-menu'
 import classnames from 'classnames'
@@ -44,6 +45,7 @@ import MoveItemTray from '@canvas/move-item-tray/react'
 import {EnvCommon} from '@canvas/global/env/EnvCommon'
 import {
   CourseNavigationTabToSave,
+  isLinkTab,
   useTabListsStore,
   type MoveItemTrayResult,
   type NavigationTab,
@@ -73,6 +75,7 @@ export default function CourseNavigationSettings({
     moveUsingTrayResult,
     tabsToSave,
     appendNewLinkItemTab,
+    deleteTab,
   } = useTabListsStore()
   const [isSaving, setIsSaving] = useState(false)
   const [moveTrayItemInternalId, setMoveTrayItemId] = useState<string | undefined>(undefined)
@@ -110,6 +113,7 @@ export default function CourseNavigationSettings({
           isEnabled={isEnabled}
           onToggleEnabled={toggleTabEnabled}
           onMove={setMoveTrayItemId}
+          onDelete={deleteTab}
         />
       </div>
     )
@@ -236,11 +240,13 @@ const NavItem = React.memo(
     isEnabled,
     onToggleEnabled,
     onMove,
+    onDelete,
   }: {
     tab: NavigationTab
     isEnabled: boolean
     onToggleEnabled: (tabInternalId: string) => void
     onMove: (tabInternalId: string) => void
+    onDelete: (tabInternalId: string) => void
   }) => {
     return (
       <View
@@ -254,7 +260,7 @@ const NavItem = React.memo(
           </View>
           <View as="div" display="inline-block" padding="small 0" margin="0 auto 0 0">
             <Flex alignItems="center" gap="x-small">
-              {tab.linkUrl && (
+              {isLinkTab(tab) && (
                 <Flex.Item>
                   <IconLinkLine size="x-small" />
                 </Flex.Item>
@@ -292,7 +298,11 @@ const NavItem = React.memo(
               placement="bottom"
               shouldHideOnSelect={true}
             >
-              <Menu.Item onClick={() => onToggleEnabled(tab.internalId)} type="button">
+              <Menu.Item
+                data-pendo="navigation-menu-disable-enable"
+                onClick={() => onToggleEnabled(tab.internalId)}
+                type="button"
+              >
                 <Flex>
                   <Flex.Item padding="0 x-small 0 0" margin="0 0 xxx-small 0">
                     {isEnabled ? <IconXSolid /> : <IconPlusSolid />}
@@ -300,7 +310,11 @@ const NavItem = React.memo(
                   <Flex.Item>{isEnabled ? I18n.t('Disable') : I18n.t('Enable')}</Flex.Item>
                 </Flex>
               </Menu.Item>
-              <Menu.Item onClick={() => onMove(tab.internalId)} type="button">
+              <Menu.Item
+                data-pendo="navigation-menu-move"
+                onClick={() => onMove(tab.internalId)}
+                type="button"
+              >
                 <Flex>
                   <Flex.Item padding="0 x-small 0 0" margin="0 0 xxx-small 0">
                     <IconUpdownLine />
@@ -308,6 +322,20 @@ const NavItem = React.memo(
                   <Flex.Item>{I18n.t('Move')}</Flex.Item>
                 </Flex>
               </Menu.Item>
+              {isLinkTab(tab) && (
+                <Menu.Item
+                  data-pendo="navigation-menu-delete"
+                  onClick={() => onDelete(tab.internalId)}
+                  type="button"
+                >
+                  <Flex>
+                    <Flex.Item padding="0 x-small 0 0" margin="0 0 xxx-small 0">
+                      <IconTrashLine />
+                    </Flex.Item>
+                    <Flex.Item>{I18n.t('Delete')}</Flex.Item>
+                  </Flex>
+                </Menu.Item>
+              )}
             </Menu>
           )}
         </Flex>

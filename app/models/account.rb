@@ -181,6 +181,7 @@ class Account < ActiveRecord::Base
   has_many :blackout_dates, as: :context, inverse_of: :context
 
   before_validation :verify_unique_sis_source_id
+  before_validation :sanitize_discovery_page, if: -> { setting_changed? :discovery_page }
   before_save :ensure_defaults
   before_save :remove_template_id, if: ->(a) { a.workflow_state_changed? && a.deleted? }
   before_save :denormalize_horizon_account_if_changed
@@ -221,6 +222,7 @@ class Account < ActiveRecord::Base
   validate :validate_course_template, if: ->(a) { a.has_attribute?(:course_template_id) && a.course_template_id_changed? }
   validates :account_calendar_subscription_type, inclusion: { in: CALENDAR_SUBSCRIPTION_TYPES }
   validate :validate_number_separators, if: ->(a) { a.settings_changed? && (a.settings.dig(:decimal_separator, :value) != a.settings_was.dig(:decimal_separator, :value) || a.settings.dig(:thousand_separator, :value) != a.settings_was.dig(:thousand_separator, :value)) }
+  validates_with Validators::AccountSettingsValidator, if: ->(a) { a.settings_changed? }
   include StickySisFields
 
   are_sis_sticky :name, :parent_account_id
@@ -318,6 +320,8 @@ class Account < ActiveRecord::Base
   add_setting :change_password_url, root_only: true
   add_setting :unknown_user_url, root_only: true
   add_setting :fft_registration_url, root_only: true
+
+  add_setting :native_discovery_enabled, boolean: true, root_only: true, default: false
 
   add_setting :restrict_student_future_view, boolean: true, default: false, inheritable: true
   add_setting :restrict_student_future_listing, boolean: true, default: false, inheritable: true
@@ -456,6 +460,7 @@ class Account < ActiveRecord::Base
   add_setting :decimal_separator, inheritable: true
   add_setting :thousand_separator, inheritable: true
   add_setting :early_access_program, boolean: true, default: false, root_only: true, inheritable: true
+  add_setting :discovery_page, root_only: true
 
   def settings=(hash)
     if hash.is_a?(Hash) || hash.is_a?(ActionController::Parameters)
@@ -1798,6 +1803,18 @@ class Account < ActiveRecord::Base
     settings[:auth_discovery_url]
   end
 
+  def native_discovery_enabled=(enabled)
+    settings[:native_discovery_enabled] = Canvas::Plugin.value_to_boolean(enabled)
+  end
+
+  def native_discovery_enabled?
+    settings[:native_discovery_enabled] == true
+  end
+
+  def native_discovery_route_active?
+    native_discovery_enabled?
+  end
+
   def auth_discovery_url_options(_request)
     {}
   end
@@ -2269,7 +2286,7 @@ class Account < ActiveRecord::Base
   def can_see_accessibility_tab?(user)
     return false if !user || !grants_right?(user, :read_course_list)
 
-    feature_enabled?(:a11y_checker) && Account.site_admin.feature_enabled?(:a11y_checker_account_statistics)
+    a11y_checker_account_statistics?
   end
 
   def is_a_context?
@@ -2897,6 +2914,23 @@ class Account < ActiveRecord::Base
       next unless client.enabled?
 
       client.delete_tenant(root_account_uuid: root_account.uuid, feature_slug: HORIZON_FEATURE_SLUG, current_user:)
+    end
+  end
+
+  def a11y_checker_account_statistics?
+    Account.site_admin.feature_enabled?(:a11y_checker_account_statistics) &&
+      (feature_enabled?(:a11y_checker) || Account.site_admin.feature_enabled?(:a11y_checker_ga2_features))
+  end
+
+  private
+
+  def sanitize_discovery_page
+    return unless settings[:discovery_page]
+
+    %i[primary secondary].each do |position|
+      settings.dig(:discovery_page, position)&.each do |item|
+        item[:label] = Sanitize.clean(item[:label]) if item.key?(:label)
+      end
     end
   end
 end

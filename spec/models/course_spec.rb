@@ -815,6 +815,35 @@ describe Course do
         expect(course).to_not be_valid
       end
 
+      it "does not allow updating account to a subaccount where roles for existing enrollments don't exist" do
+        account1 = Account.default.sub_accounts.create!
+        role = account1.roles.create! name: "Something", base_role_type: "StudentEnrollment"
+        course = course_model(account: account1)
+        user = user_with_pseudonym(account: Account.default)
+        course.enroll_user(user, "StudentEnrollment", role:)
+
+        account2 = Account.default.sub_accounts.create! name: "Sad Account"
+        course.account = account2
+        expect(course).not_to be_valid
+        expect(course.errors[:account_id]).to include "course roles unavailable in Sad Account: Something"
+      end
+
+      it "maps enrollment roles to matching ones in the new account" do
+        account1 = Account.default.sub_accounts.create!
+        role = account1.roles.create! name: "Something", base_role_type: "StudentEnrollment"
+        course = course_model(account: account1)
+        user = user_with_pseudonym(account: Account.default)
+        enrollment = course.enroll_user(user, "StudentEnrollment", role:)
+
+        account2 = Account.default.sub_accounts.create!
+        # ensure the active role is chosen if there are dups (a unique constraint ensures only one active one can exist)
+        account2.roles.create! name: "Something", workflow_state: "inactive", base_role_type: "StudentEnrollment"
+        role2 = account2.roles.create! name: "Something", workflow_state: "active", base_role_type: "StudentEnrollment"
+        course.account = account2
+        course.save!
+        expect(enrollment.reload.role).to eq role2
+      end
+
       it "requires unique sis_source_id" do
         other_course = course_factory
         other_course.sis_source_id = "sisid"
@@ -3138,6 +3167,79 @@ describe Course do
         expect(tab_ids_without_ai).to eql(default_tab_ids)
         expect(tab_ids.length).to be > 0
         expect(@course.tabs_available(@user).filter_map { |t| t[:label] }.length).to eql(tab_ids.length)
+      end
+
+      describe "nav menu links" do
+        before do
+          @course.root_account.enable_feature!(:nav_menu_links)
+          link
+        end
+
+        let(:link) do
+          NavMenuLink.create!(
+            context: @course,
+            nav_type: "course",
+            label: "External Resource",
+            url: "https://example.com"
+          )
+        end
+
+        it "includes nav menu link tabs when feature flag is enabled" do
+          tabs = @course.tabs_available(@user, include_external: true)
+          nav_link_tab = tabs.find { |t| t[:id] == "nav_menu_link_#{link.id}" }
+
+          expect(nav_link_tab[:label]).to eq("External Resource")
+          expect(nav_link_tab[:href]).to eq(:nav_menu_link_url)
+          expect(nav_link_tab[:args]).to eq(["https://example.com"])
+          expect(nav_link_tab[:external]).to be true
+          expect(nav_link_tab[:target]).to eq("_blank")
+        end
+
+        it "does not include nav menu links when feature flag is disabled" do
+          @course.root_account.disable_feature!(:nav_menu_links)
+          tabs = @course.tabs_available(@user)
+          expect(tabs.pluck(:id)).not_to include("nav_menu_link_#{link.id}")
+        end
+
+        it "does not include nav menu links when include_external is false" do
+          tabs = @course.tabs_available(@user, include_external: false)
+          expect(tabs.pluck(:id)).not_to include("nav_menu_link_#{link.id}")
+        end
+
+        it "puts nav menu links in the correct place" do
+          @course.tab_configuration = [
+            { "id" => Course::TAB_HOME },
+            { "id" => Course::TAB_ASSIGNMENTS },
+            { "id" => "nav_menu_link_#{link.id}" }
+          ]
+          @course.save!
+          tabs = @course.tabs_available(@user)
+          expect(tabs.pluck(:id)[0...3]).to eq([
+                                                 Course::TAB_HOME,
+                                                 Course::TAB_ASSIGNMENTS,
+                                                 "nav_menu_link_#{link.id}",
+                                               ])
+        end
+
+        it "shows hidden nav menu link tabs to admins but not students" do
+          @course.tab_configuration = [
+            { "id" => Course::TAB_HOME },
+            { "id" => Course::TAB_ASSIGNMENTS },
+            { "id" => "nav_menu_link_#{link.id}", "hidden" => true }
+          ]
+          @course.save!
+
+          # Teachers/admins can see hidden nav menu links (like regular tabs)
+          tabs = @course.tabs_available(@teacher)
+          nav_link_tab = tabs.find { |t| t[:id] == "nav_menu_link_#{link.id}" }
+          expect(nav_link_tab).to be_present
+          expect(nav_link_tab[:hidden]).to be true
+
+          # Students cannot see hidden nav menu links
+          student_in_course(active_all: true)
+          tabs = @course.tabs_available(@student)
+          expect(tabs.pluck(:id)).not_to include("nav_menu_link_#{link.id}")
+        end
       end
 
       it "handles hidden_unused correctly for discussions" do
@@ -9402,12 +9504,14 @@ describe Course do
         active_assignments = double(not_excluded_from_accessibility_scan: double(count: assignment_count))
         allow(course.assignments).to receive(:active).and_return(active_assignments)
         allow(course.discussion_topics).to receive(:scannable).and_return(double(count: discussion_topic_count))
+        allow(course.announcements).to receive(:active).and_return(double(count: announcement_count))
       end
 
       context "when total resources exceed limit" do
         let(:wiki_count) { 500 }
         let(:assignment_count) { 300 }
         let(:discussion_topic_count) { 300 }
+        let(:announcement_count) { 200 }
 
         it "returns true" do
           expect(course.exceeds_accessibility_scan_limit?).to be true
@@ -9418,6 +9522,7 @@ describe Course do
         let(:wiki_count) { 500 }
         let(:assignment_count) { 200 }
         let(:discussion_topic_count) { 200 }
+        let(:announcement_count) { 50 }
 
         it "returns false" do
           expect(course.exceeds_accessibility_scan_limit?).to be false
@@ -9427,7 +9532,8 @@ describe Course do
       context "when total resources equal limit" do
         let(:wiki_count) { 500 }
         let(:assignment_count) { 200 }
-        let(:discussion_topic_count) { 300 }
+        let(:discussion_topic_count) { 200 }
+        let(:announcement_count) { 100 }
 
         it "returns false" do
           expect(course.exceeds_accessibility_scan_limit?).to be false

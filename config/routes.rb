@@ -349,15 +349,6 @@ CanvasRails::Application.routes.draw do
       get :tool_launch
     end
 
-    # Support wildcard paths to enable routing in the federated New Quizzes app.
-    #
-    # When the `new_quizzes_native_experience_enabled` feature flag is enabled, path segments after
-    # `/assignment/:id` will be handled by the router in the federated New Quizzes app. Otherwise,
-    # pages will fall back to the assignment view page.
-    #
-    # This route must come after the resources :assignments block to avoid conflicts.
-    get "assignments/:id#{full_path_glob}", controller: :assignments, action: :show
-
     resources :grading_standards, only: %i[index create update destroy]
 
     resources :assignment_groups do
@@ -1291,6 +1282,7 @@ CanvasRails::Application.routes.draw do
       post "courses/:course_id/ai_experiences/:ai_experience_id/conversations", action: :create
       post "courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id/messages", action: :post_message, as: "course_ai_experience_conversation_messages"
       delete "courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id", action: :destroy
+      get "courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id/evaluation", action: :evaluation, as: "course_ai_experience_conversation_evaluation"
     end
 
     scope(controller: :microfrontends_release_tag_override) do
@@ -1305,6 +1297,11 @@ CanvasRails::Application.routes.draw do
       put "accounts/:account_id/account_calendars", action: :bulk_update, as: :bulk_update_account_calendars
       get "accounts/:account_id/account_calendars", action: :all_calendars, as: :all_account_calendars
       get "accounts/:account_id/visible_calendars_count", action: :visible_calendars_count, as: :visible_calendars_count
+    end
+
+    scope(controller: :discovery_pages_api) do
+      get "discovery_pages", action: :show
+      put "discovery_pages", action: :upsert, as: :discovery_pages
     end
 
     scope(controller: :account_notifications) do
@@ -1669,10 +1666,7 @@ CanvasRails::Application.routes.draw do
       %w[course account].each do |context|
         get "#{context}s/:#{context}_id/external_tools/sessionless_launch", action: :generate_sessionless_launch, as: "#{context}_external_tool_sessionless_launch"
 
-        # Support client-side routing in federated apps (e.g., New Quizzes)
-        # Routes like `/courses/:course_id/external_tools/:external_tool_id/any/nested/path`
-        # will be handled by the router in the federated app
-        get "#{context}s/:#{context}_id/external_tools/:external_tool_id#{full_path_glob}", action: :show, as: "#{context}_external_tool_show"
+        get "#{context}s/:#{context}_id/external_tools/:external_tool_id", action: :show, as: "#{context}_external_tool_show"
 
         # Migration URL
         get "#{context}s/:#{context}_id/external_tools/:external_tool_id/migration_info", action: :migration_info, as: "#{context}_external_tool_migration_info"
@@ -1974,6 +1968,11 @@ CanvasRails::Application.routes.draw do
       post "users/:user_id/page_views/query", action: :query, as: "user_page_views_enqueue_query"
       get "users/:user_id/page_views/query/:query_id", action: :poll_query, as: "page_views_poll_query_status"
       get "users/:user_id/page_views/query/:query_id/results", action: :query_results, as: "page_views_get_query_results"
+
+      # routes for batch page views queries
+      post "users/page_views/query", action: :batch_query, as: "page_views_enqueue_batch_query"
+      get "users/page_views/query/:query_id", action: :poll_batch_query, as: "page_views_poll_batch_query_status"
+      get "users/page_views/query/:query_id/results", action: :batch_query_results, as: "page_views_get_batch_query_results"
     end
 
     get "users/:user_id/profile", controller: :profile, action: :settings
@@ -2133,6 +2132,7 @@ CanvasRails::Application.routes.draw do
       put "accounts/:account_id/lti_registrations/:id", action: :update
       put "accounts/:account_id/lti_registrations/:id/reset", action: :reset
       post "accounts/:account_id/lti_registrations/:id/bind", action: :bind
+      post "accounts/:account_id/lti_registrations/:id/install_from_template", action: :install_from_template
     end
 
     scope(controller: "lti/deployments") do
@@ -2514,6 +2514,7 @@ CanvasRails::Application.routes.draw do
     scope(controller: :outcome_results) do
       get "courses/:course_id/outcome_rollups", action: :rollups, as: "course_outcome_rollups"
       get "courses/:course_id/outcome_results", action: :index, as: "course_outcome_results"
+      get "courses/:course_id/outcome_mastery_distribution", action: :mastery_distribution
       get "courses/:course_id/outcomes/:outcome_id/contributing_scores", action: :contributing_scores, as: "course_outcome_contributing_scores"
       post "courses/:course_id/assign_outcome_order", action: :outcome_order, as: "course_outcomes_order"
       post "enqueue_outcome_rollup_calculation", action: :enqueue_outcome_rollup_calculation

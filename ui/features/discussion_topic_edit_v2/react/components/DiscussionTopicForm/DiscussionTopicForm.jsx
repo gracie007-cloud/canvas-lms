@@ -168,7 +168,7 @@ function DiscussionTopicForm({
     }
   }
 
-  const allSectionsOption = {id: 'all', name: 'All Sections'}
+  const allSectionsOption = {id: 'all', name: I18n.t('All Sections')}
 
   const isAlreadyAGroupDiscussion = !!currentDiscussionTopic?.groupSet?._id
 
@@ -317,7 +317,9 @@ function DiscussionTopicForm({
     currentDiscussionTopic?.assignment?.peerReviews?.dueAt || '',
   )
   const [assignedInfoList, setAssignedInfoList] = useState(
-    isEditing ? buildAssignmentOverrides(currentDiscussionTopic) : buildDefaultAssignmentOverride(),
+    isEditing || currentDiscussionTopic?.assignment?.assignmentOverrides?.nodes?.length > 0
+      ? buildAssignmentOverrides(currentDiscussionTopic)
+      : buildDefaultAssignmentOverride(),
   )
 
   const [gradedDiscussionRefMap, setGradedDiscussionRefMap] = useState(new Map())

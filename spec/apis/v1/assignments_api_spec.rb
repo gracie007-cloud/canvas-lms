@@ -4082,7 +4082,8 @@ describe AssignmentsApiController, type: :request do
 
           expect(PeerReview::DateOverriderService).to receive(:call).with(
             peer_review_sub_assignment:,
-            overrides: params[:peer_review_overrides]
+            overrides: params[:peer_review_overrides],
+            reload_associations: true
           )
 
           test_object.send(:create_api_peer_review_sub_assignment, parent_assignment, params)
@@ -4110,7 +4111,8 @@ describe AssignmentsApiController, type: :request do
 
           expect(PeerReview::DateOverriderService).to receive(:call).with(
             peer_review_sub_assignment:,
-            overrides: []
+            overrides: [],
+            reload_associations: true
           )
 
           test_object.send(:create_api_peer_review_sub_assignment, parent_assignment, params)
@@ -5187,7 +5189,8 @@ describe AssignmentsApiController, type: :request do
 
           expect(PeerReview::DateOverriderService).to receive(:call).with(
             peer_review_sub_assignment:,
-            overrides: params[:peer_review_overrides]
+            overrides: params[:peer_review_overrides],
+            reload_associations: true
           )
 
           test_object.send(:update_api_peer_review_sub_assignment, parent_assignment, params)
@@ -5215,7 +5218,8 @@ describe AssignmentsApiController, type: :request do
 
           expect(PeerReview::DateOverriderService).to receive(:call).with(
             peer_review_sub_assignment:,
-            overrides: []
+            overrides: [],
+            reload_associations: true
           )
 
           test_object.send(:update_api_peer_review_sub_assignment, parent_assignment, params)
@@ -5879,6 +5883,13 @@ describe AssignmentsApiController, type: :request do
             }
           end
 
+          # As from now we are validating that Nuw Quizzes is enabled when an Assignment with
+          # external tool Quizzes 2 is created, we need to enable the feature to make these
+          # specs pass
+          before do
+            allow(NewQuizzesFeaturesHelper).to receive(:new_quizzes_enabled?).and_return(true)
+          end
+
           it "doesn't retain peer review settings" do
             api_call(:post,
                      "/api/v1/courses/#{@course.id}/assignments",
@@ -5892,6 +5903,44 @@ describe AssignmentsApiController, type: :request do
                      { expected_status: 200 })
 
             expect(@course.assignments.last.peer_reviews).to be_falsey
+          end
+
+          it "identifies the assignment as quiz_lti and sets it up correctly" do
+            api_call(:post,
+                     "/api/v1/courses/#{@course.id}/assignments",
+                     {
+                       controller: "assignments_api",
+                       action: "create",
+                       format: "json",
+                       course_id: @course.id.to_s
+                     },
+                     { assignment: assignment_params },
+                     { expected_status: 200 })
+
+            assignment = @course.assignments.last
+            expect(assignment.quiz_lti?).to be true
+            expect(assignment.submission_types).to eq "external_tool"
+          end
+
+          context "when New Quizzes is not enabled" do
+            before do
+              allow(NewQuizzesFeaturesHelper).to receive(:new_quizzes_enabled?).and_return(false)
+            end
+
+            it "returns an error" do
+              response = api_call(:post,
+                                  "/api/v1/courses/#{@course.id}/assignments",
+                                  {
+                                    controller: "assignments_api",
+                                    action: "create",
+                                    format: "json",
+                                    course_id: @course.id.to_s
+                                  },
+                                  { assignment: assignment_params },
+                                  { expected_status: 400 })
+
+              expect(response["errors"]["external_tool_tag_attributes[url]"]).to be_present
+            end
           end
         end
 

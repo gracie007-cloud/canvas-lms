@@ -198,6 +198,14 @@ class Lti::Registration < ActiveRecord::Base
     end
   end
 
+  def developer_key
+    super || template_registration&.developer_key
+  end
+
+  def developer_key_id
+    super || template_registration&.developer_key_id
+  end
+
   delegate :site_admin?, to: :account
 
   # TODO: this will eventually need to account for 1.1 registrations
