@@ -30,7 +30,12 @@ import {Overlay, Mask} from '@instructure/ui-overlays'
 import {IconDragHandleLine, IconTrashLine} from '@instructure/ui-icons'
 import type {BaseWidgetProps} from '../../../types'
 import {useResponsiveContext} from '../../../hooks/useResponsiveContext'
-import {useWidgetLayout, type MoveAction} from '../../../hooks/useWidgetLayout'
+import {
+  useWidgetLayout,
+  getMoveActionDescription,
+  type MoveAction,
+} from '../../../hooks/useWidgetLayout'
+import {announceToScreenReader} from '../../../utils/screenReaderAnnounce'
 import WidgetContextMenu from '../../shared/WidgetContextMenu'
 
 const I18n = createI18nScope('widget_dashboard')
@@ -92,8 +97,10 @@ const TemplateWidget: React.FC<TemplateWidgetProps> = ({
   }, [])
 
   const handleMenuSelect = (action: string) => {
+    const moveAction = action as MoveAction
+
     flushSync(() => {
-      moveWidget(widget.id, action as MoveAction)
+      moveWidget(widget.id, moveAction)
     })
 
     const dragHandle = document.querySelector(
@@ -101,11 +108,18 @@ const TemplateWidget: React.FC<TemplateWidgetProps> = ({
     ) as HTMLElement
     if (dragHandle) {
       dragHandle.focus()
+
+      const moveAnnouncement = I18n.t('%{widgetName}, moved %{direction}', {
+        widgetName: widgetTitle,
+        direction: getMoveActionDescription(moveAction),
+      })
+
+      announceToScreenReader(moveAnnouncement)
     }
   }
 
   const handleRemove = () => {
-    removeWidget(widget.id)
+    removeWidget(widget.id, widgetTitle)
   }
 
   const editModeActions = (
@@ -134,6 +148,7 @@ const TemplateWidget: React.FC<TemplateWidgetProps> = ({
         }
         widget={widget}
         config={config}
+        isStacked={!isDesktop}
         onSelect={handleMenuSelect}
       />
       <IconButton
@@ -214,7 +229,7 @@ const TemplateWidget: React.FC<TemplateWidgetProps> = ({
                 {headerActions && (
                   <Flex.Item padding="x-small 0 x-small x-small">{headerActions}</Flex.Item>
                 )}
-                {isEditMode && isDesktop && (
+                {isEditMode && (
                   <Flex.Item padding="x-small 0 x-small x-small">{editModeActions}</Flex.Item>
                 )}
               </Flex>
@@ -226,7 +241,7 @@ const TemplateWidget: React.FC<TemplateWidgetProps> = ({
                   </Heading>
                 </Flex.Item>
                 {headerActions && <Flex.Item shouldGrow={false}>{headerActions}</Flex.Item>}
-                {isEditMode && isDesktop && (
+                {isEditMode && (
                   <Flex.Item margin="0 0 0 small" shouldGrow={false}>
                     {editModeActions}
                   </Flex.Item>

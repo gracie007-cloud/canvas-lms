@@ -1277,9 +1277,7 @@ describe DiscussionTopic do
                                                                   .group(:context_id)
                                                                   .pluck("array_agg(attachment_id) as attachment_ids")
 
-          child_association_attachment_ids.each do |attachment_ids|
-            expect(attachment_ids).to match_array([@attachment1.id, @attachment2.id])
-          end
+          expect(child_association_attachment_ids).to all(match_array([@attachment1.id, @attachment2.id]))
         end
 
         it "preserves user_id from parent associations when copying to child topics" do
@@ -1316,9 +1314,7 @@ describe DiscussionTopic do
                                                                   .group(:context_id)
                                                                   .pluck("array_agg(attachment_id) as attachment_ids")
 
-          child_association_attachment_ids.each do |attachment_ids|
-            expect(attachment_ids).to match_array([@attachment3.id])
-          end
+          expect(child_association_attachment_ids).to all(match_array([@attachment3.id]))
         end
       end
     end
@@ -1680,19 +1676,19 @@ describe DiscussionTopic do
       end
 
       it "does not allow observers to see replies to a discussion linked students haven't posted in" do
-        expect(@topic.initial_post_required?(@observer)).to be
+        expect(@topic.initial_post_required?(@observer)).to be true
       end
 
       # previously this worked for exactly one observer enrollment, whichever became @context_enrollment
       # so test both ways
       it "allows observers to see replies in a discussion a linked student has posted in (1/2)" do
         @topic.reply_from(user: @student, text: "wat")
-        expect(@topic.initial_post_required?(@observer)).not_to be
+        expect(@topic.initial_post_required?(@observer)).to be false
       end
 
       it "allows observers to see replies in a discussion a linked student has posted in (2/2)" do
         @topic.reply_from(user: @other_student, text: "wat")
-        expect(@topic.initial_post_required?(@observer)).not_to be
+        expect(@topic.initial_post_required?(@observer)).to be false
       end
     end
   end
@@ -3552,6 +3548,51 @@ describe DiscussionTopic do
         expect(@topic.reply_to_entry_required_count).to eq 5
         expect(@topic).to be_valid
       end
+
+      describe "can_lock?" do
+        it "returns false when reply_to_topic checkpoint has a future due date" do
+          @topic.reply_to_topic_checkpoint.update!(due_at: 2.days.from_now)
+          @topic.reply_to_entry_checkpoint.update!(due_at: 2.days.ago)
+
+          expect(@topic.can_lock?).to be false
+        end
+
+        it "returns false when reply_to_entry checkpoint has a future due date" do
+          @topic.reply_to_topic_checkpoint.update!(due_at: 2.days.ago)
+          @topic.reply_to_entry_checkpoint.update!(due_at: 2.days.from_now)
+
+          expect(@topic.can_lock?).to be false
+        end
+
+        it "returns false when both checkpoints have future due dates" do
+          @topic.reply_to_topic_checkpoint.update!(due_at: 2.days.from_now)
+          @topic.reply_to_entry_checkpoint.update!(due_at: 3.days.from_now)
+
+          expect(@topic.can_lock?).to be false
+        end
+
+        it "returns true when all checkpoint due dates have passed" do
+          @topic.reply_to_topic_checkpoint.update!(due_at: 2.days.ago)
+          @topic.reply_to_entry_checkpoint.update!(due_at: 1.day.ago)
+
+          expect(@topic.can_lock?).to be true
+        end
+
+        it "returns true when checkpoints have no due dates" do
+          @topic.reply_to_topic_checkpoint.update!(due_at: nil)
+          @topic.reply_to_entry_checkpoint.update!(due_at: nil)
+
+          expect(@topic.can_lock?).to be true
+        end
+
+        it "returns false when parent assignment has future due date even if checkpoint due dates have passed" do
+          @topic.assignment.update!(due_at: 2.days.from_now)
+          @topic.reply_to_topic_checkpoint.update!(due_at: 2.days.ago)
+          @topic.reply_to_entry_checkpoint.update!(due_at: 1.day.ago)
+
+          expect(@topic.can_lock?).to be false
+        end
+      end
     end
   end
 
@@ -4298,6 +4339,7 @@ describe DiscussionTopic do
   it_behaves_like "an accessibility scannable resource" do
     before do
       Account.site_admin.enable_feature!(:a11y_checker_additional_resources)
+      Account.site_admin.enable_feature!(:a11y_checker_ga2_features)
     end
 
     let(:course) { course_model }
@@ -4363,18 +4405,11 @@ describe DiscussionTopic do
         topic.update!(message: "Updated message")
       end
 
-      it "does not trigger accessibility scan for announcements on create" do
-        expect(Accessibility::ResourceScannerService).not_to receive(:call)
+      it "triggers destroy when deleting discussion topic" do
+        topic = DiscussionTopic.create!(title: "Test Topic", course:)
+        AccessibilityResourceScan.create!(context: topic, course:)
 
-        Announcement.create!(title: "Test Announcement", message: "Test message", course:)
-      end
-
-      it "does not trigger accessibility scan for announcements on update" do
-        announcement = Announcement.create!(title: "Test Announcement", message: "Test message", course:)
-
-        expect(Accessibility::ResourceScannerService).not_to receive(:call)
-
-        announcement.update!(message: "Updated message")
+        expect { topic.destroy! }.to change { AccessibilityResourceScan.where(discussion_topic_id: topic.id).count }.from(1).to(0)
       end
     end
 
@@ -4382,6 +4417,7 @@ describe DiscussionTopic do
       before do
         Account.site_admin.enable_feature!(:a11y_checker_additional_resources)
         course.root_account.enable_feature!(:a11y_checker)
+        course.root_account.enable_feature!(:accessibility_automatic_scanning)
         course.enable_feature!(:a11y_checker_eap)
         Progress.create!(tag: Accessibility::CourseScanService::SCAN_TAG, context: course, workflow_state: "completed")
       end
@@ -4400,20 +4436,10 @@ describe DiscussionTopic do
         topic.update!(message: "Updated message")
       end
 
-      context "when topic is announcement" do
-        it "triggers accessibility scan on create" do
-          expect(Accessibility::ResourceScannerService).to receive(:call).with(resource: an_instance_of(Announcement))
+      it "triggers destroy when deleting discussion topic" do
+        topic = DiscussionTopic.create!(title: "Test Topic", course:)
 
-          Announcement.create!(title: "Test Announcement", message: "Test message", course:)
-        end
-
-        it "triggers accessibility scan on update" do
-          announcement = Announcement.create!(title: "Test Announcement", message: "Test message", course:)
-
-          expect(Accessibility::ResourceScannerService).to receive(:call).with(resource: an_instance_of(Announcement))
-
-          announcement.update!(message: "Updated message")
-        end
+        expect { topic.destroy! }.to change { AccessibilityResourceScan.where(discussion_topic_id: topic.id).count }.from(1).to(0)
       end
 
       context "when topic is graded" do
@@ -4611,6 +4637,37 @@ describe DiscussionTopic do
             expect(AccessibilityResourceScan.where(context: topic).count).to eq(0)
           end
         end
+      end
+    end
+
+    context "when automatic scanning feature flag is disabled" do
+      before do
+        Account.site_admin.enable_feature!(:a11y_checker_additional_resources)
+        course.root_account.enable_feature!(:a11y_checker)
+        course.root_account.disable_feature!(:accessibility_automatic_scanning)
+        course.enable_feature!(:a11y_checker_eap)
+        Progress.create!(tag: Accessibility::CourseScanService::SCAN_TAG, context: course, workflow_state: "completed")
+      end
+
+      it "does not trigger accessibility scan on create" do
+        expect(Accessibility::ResourceScannerService).not_to receive(:call)
+
+        DiscussionTopic.create!(title: "Test Topic", message: "Test message", course:)
+      end
+
+      it "does not trigger accessibility scan on update" do
+        topic = DiscussionTopic.create!(title: "Test Topic", course:)
+
+        expect(Accessibility::ResourceScannerService).not_to receive(:call)
+
+        topic.update!(message: "Updated message")
+      end
+
+      it "still triggers destroy when deleting discussion topic" do
+        topic = DiscussionTopic.create!(title: "Test Topic", course:)
+        AccessibilityResourceScan.create!(context: topic, course:)
+
+        expect { topic.destroy! }.to change { AccessibilityResourceScan.where(discussion_topic_id: topic.id).count }.from(1).to(0)
       end
     end
   end

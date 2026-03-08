@@ -35,10 +35,6 @@ RSpec.describe Lti::RegistrationsController do
   let_once(:account) { account_model }
   let_once(:admin) { account_admin_user(name: "A User", account:) }
 
-  before(:once) do
-    account.enable_feature!(:lti_registrations_page)
-  end
-
   before do
     user_session(admin)
   end
@@ -78,17 +74,6 @@ RSpec.describe Lti::RegistrationsController do
       it "redirects to the homepage" do
         get :index, params: { account_id: account.id }
         expect(response).to be_redirect
-      end
-    end
-
-    context "with flag disabled" do
-      before do
-        account.disable_feature!(:lti_registrations_page)
-      end
-
-      it "returns 404" do
-        get :index, params: { account_id: account.id }
-        expect(response).to be_not_found
       end
     end
 
@@ -191,8 +176,8 @@ RSpec.describe Lti::RegistrationsController do
 
       before do
         account.root_account.enable_feature!(:lti_asset_processor_tii_migration)
-        allow(Setting).to receive(:get).and_call_original
-        allow(Setting).to receive(:get).with("turnitin_asset_processor_client_id", "").and_return(turnitin_client_id)
+        account.root_account.settings[:turnitin_asset_processor_client_id] = turnitin_client_id
+        account.root_account.save!
       end
 
       it "sets turnitinAPClientId in js_env" do
@@ -329,6 +314,23 @@ RSpec.describe Lti::RegistrationsController do
         end
       end
 
+      context "when registration is inactive" do
+        let(:inactive_registration) do
+          reg = lti_registration_model(account:, name: "Inactive registration")
+          lti_registration_account_binding_model(registration: reg, account:, workflow_state: "on", created_by: admin)
+          reg.deactivate!
+          reg
+        end
+
+        it "includes the inactive registration with workflow_state 'inactive'" do
+          inactive_registration
+          subject
+          reg_json = response_data.find { |r| r["id"] == inactive_registration.id }
+          expect(reg_json).to be_present
+          expect(reg_json["workflow_state"]).to eq("inactive")
+        end
+      end
+
       context "when sorting by installed_by" do
         subject { get "/api/v1/accounts/#{account.id}/lti_registrations?sort=installed_by" }
 
@@ -453,16 +455,29 @@ RSpec.describe Lti::RegistrationsController do
         end
       end
 
-      context "when sorting by a workflow_state" do
-        subject { get "/api/v1/accounts/#{account.id}/lti_registrations?sort=on" }
+      context "when sorting by workflow_state" do
+        subject { get "/api/v1/accounts/#{account.id}/lti_registrations?sort=on&dir=asc" }
 
-        it "does not error if the account binding is nil" do
-          reg = lti_registration_model(account:, name: "no account bindings")
-          # expect it to have no account bindings, just in case we start automatically
-          # creating a default one in the future.
-          expect(reg.lti_registration_account_bindings).to eq([])
+        context "with lti_deactivate_registrations disabled" do
+          before do
+            account.disable_feature!(:lti_deactivate_registrations)
+          end
+
+          it "does not error if the account binding is nil" do
+            reg = lti_registration_model(account:, name: "no account bindings")
+            expect(reg.lti_registration_account_bindings).to eq([])
+            subject
+            expect(response_data.first["name"]).to eq("no account bindings")
+          end
+        end
+
+        it "sorts by registration workflow_state" do
+          inactive_reg = lti_registration_model(account:, name: "Inactive reg")
+          inactive_reg.deactivate!
+
           subject
-          expect(response_data.last["name"]).to eq("no account bindings")
+          workflow_states = response_data.pluck("workflow_state")
+          expect(workflow_states).to eq(workflow_states.sort)
         end
       end
 
@@ -608,7 +623,6 @@ RSpec.describe Lti::RegistrationsController do
 
         before do
           user_session(admin)
-          account.enable_feature!(:lti_registrations_page)
           inherited_binding
         end
 
@@ -633,15 +647,6 @@ RSpec.describe Lti::RegistrationsController do
         it "returns 403" do
           subject
           expect(response).to be_forbidden
-        end
-      end
-
-      context "with flag disabled" do
-        before { account.disable_feature!(:lti_registrations_page) }
-
-        it "returns 404" do
-          subject
-          expect(response).to be_not_found
         end
       end
     end
@@ -765,15 +770,6 @@ RSpec.describe Lti::RegistrationsController do
       it "returns 403" do
         subject
         expect(response).to be_forbidden
-      end
-    end
-
-    context "with flag disabled" do
-      before { account.disable_feature!(:lti_registrations_page) }
-
-      it "returns 404" do
-        subject
-        expect(response).to be_not_found
       end
     end
 
@@ -953,15 +949,6 @@ RSpec.describe Lti::RegistrationsController do
       it "returns 403" do
         subject
         expect(response).to be_forbidden
-      end
-    end
-
-    context "with flag disabled" do
-      before { account.disable_feature!(:lti_registrations_page) }
-
-      it "returns 404" do
-        subject
-        expect(response).to be_not_found
       end
     end
 
@@ -1287,45 +1274,40 @@ RSpec.describe Lti::RegistrationsController do
       end
     end
 
+    # TEMPORARY: Manual registrations now merge overlays into configuration
     context "sending an overlay" do
       let(:params) do
         super().tap do |p|
-          p[:overlay] = { "name" => "overlay name" }
+          p[:overlay] = { "title" => "overlay title" }
         end
       end
 
-      it "creates an overlay" do
-        expect { subject }.to change { Lti::Overlay.count }.by(1)
+      it "merges overlay into configuration (no overlay created)" do
+        expect { subject }.not_to change { Lti::Overlay.count }
         expect(subject).to be_successful
 
-        expect(registration.overlay_for(account).data.with_indifferent_access)
-          .to eq(params[:overlay].with_indifferent_access)
+        expect(tool_configuration.reload.title).to eq("overlay title")
       end
 
       context "but an overlay already exists" do
         before do
-          Lti::Overlay.create!(registration:, account:, data: { "name" => "old name" }, updated_by: admin)
+          Lti::Overlay.create!(registration:, account:, data: { "title" => "old title" }, updated_by: admin)
         end
 
-        it "updates the existing overlay" do
+        it "merges new overlay into configuration (clears existing overlay)" do
           expect { subject }.not_to change { Lti::Overlay.count }
 
           expect(subject).to be_successful
-          expect(registration.overlay_for(account).data.with_indifferent_access)
-            .to eq(params[:overlay].with_indifferent_access)
-        end
-
-        it "returns the overlay versions" do
-          expect(subject).to be_successful
-
-          expect(response_json[:overlay]).to include({ versions: an_instance_of(Array) })
+          expect(tool_configuration.reload.title).to eq("overlay title")
+          # The overlay data should be cleared after merging
+          expect(registration.overlay_for(account)&.data || {}).to be_empty
         end
       end
 
       context "an overlay exists in Site Admin but not for the current account" do
         let(:site_admin_user) { account_admin_user(account: Account.site_admin) }
         let(:site_admin_overlay) do
-          Lti::Overlay.create!(registration:, account: Account.site_admin, data: { "name" => "site admin overlay" }, updated_by: site_admin_user)
+          Lti::Overlay.create!(registration:, account: Account.site_admin, data: { "title" => "site admin overlay" }, updated_by: site_admin_user)
         end
 
         before do
@@ -1338,11 +1320,10 @@ RSpec.describe Lti::RegistrationsController do
           expect { subject }.not_to change { site_admin_overlay.reload }
         end
 
-        it "creates a new overlay for the current account" do
-          expect { subject }.to change { Lti::Overlay.count }.by(1)
+        it "merges overlay into configuration (no new overlay created)" do
+          expect { subject }.not_to change { Lti::Overlay.count }
 
-          expect(Lti::Overlay.find_by(registration:, account:).data.with_indifferent_access)
-            .to eq(params[:overlay].with_indifferent_access)
+          expect(tool_configuration.reload.title).to eq("overlay title")
         end
       end
     end
@@ -1372,6 +1353,7 @@ RSpec.describe Lti::RegistrationsController do
       end
     end
 
+    # TEMPORARY: Manual registrations now merge overlays into configuration
     context "when updating only the overlay" do
       let(:params) do
         {
@@ -1381,12 +1363,14 @@ RSpec.describe Lti::RegistrationsController do
         }
       end
 
-      it "is successful" do
-        expect { subject }.not_to change { tool_configuration.reload.internal_lti_configuration }
+      it "is successful and merges overlay into configuration" do
         expect(subject).to be_successful
 
-        expect(registration.overlay_for(account).data.with_indifferent_access)
-          .to eq(params[:overlay].with_indifferent_access)
+        # The configuration SHOULD change (disabled placement applied)
+        reloaded_config = tool_configuration.reload.internal_lti_configuration.with_indifferent_access
+        course_nav = reloaded_config[:placements].find { |p| p[:placement] == "course_navigation" }
+        expect(course_nav).not_to be_nil
+        expect(course_nav[:enabled]).to be(false)
       end
 
       it "still tries to update all installed external tools" do
@@ -1456,6 +1440,8 @@ RSpec.describe Lti::RegistrationsController do
       it { is_expected.to have_http_status(:unprocessable_content) }
     end
 
+    # TEMPORARY: Manual registrations now merge overlays into configuration
+    # Note: nil values in overlays are compacted out, so they don't actually set fields to nil
     context "with overlay containing nil attribute" do
       let(:params) do
         super().tap do |p|
@@ -1463,9 +1449,11 @@ RSpec.describe Lti::RegistrationsController do
         end
       end
 
-      it "is successful" do
+      it "is successful (nil values are compacted out, domain remains unchanged)" do
+        original_domain = tool_configuration.domain
         expect(subject).to be_successful
-        expect(registration.overlay_for(account).data[:domain]).to be_nil
+        # The domain should remain unchanged because nil values are compacted
+        expect(tool_configuration.reload.domain).to eq(original_domain)
       end
     end
 
@@ -1497,14 +1485,6 @@ RSpec.describe Lti::RegistrationsController do
 
       it "returns 403" do
         expect(subject).to be_forbidden
-      end
-    end
-
-    context "with flag disabled" do
-      before { account.disable_feature!(:lti_registrations_page) }
-
-      it "returns 404" do
-        expect(subject).to be_not_found
       end
     end
   end
@@ -1541,15 +1521,6 @@ RSpec.describe Lti::RegistrationsController do
       it "returns 403" do
         subject
         expect(response).to be_forbidden
-      end
-    end
-
-    context "with flag disabled" do
-      before { account.disable_feature!(:lti_registrations_page) }
-
-      it "returns 404" do
-        subject
-        expect(response).to be_not_found
       end
     end
 
@@ -1658,15 +1629,6 @@ RSpec.describe Lti::RegistrationsController do
       it "returns 403" do
         subject
         expect(response).to be_forbidden
-      end
-    end
-
-    context "with flag disabled" do
-      before { account.disable_feature!(:lti_registrations_page) }
-
-      it "returns 404" do
-        subject
-        expect(response).to be_not_found
       end
     end
 
@@ -1856,15 +1818,6 @@ RSpec.describe Lti::RegistrationsController do
       end
     end
 
-    context "with flag disabled" do
-      before { account.disable_feature!(:lti_registrations_page) }
-
-      it "returns 404" do
-        subject
-        expect(response).to be_not_found
-      end
-    end
-
     context "without any params" do
       it "returns 422" do
         subject
@@ -1995,7 +1948,7 @@ RSpec.describe Lti::RegistrationsController do
       end
 
       context "when url responds with non-200" do
-        let(:result) { double(class: Net::HTTPBadRequest, code: 400) }
+        let(:result) { instance_double(Net::HTTPBadRequest, class: Net::HTTPBadRequest, code: 400) }
 
         it "returns 422" do
           subject
@@ -2004,7 +1957,7 @@ RSpec.describe Lti::RegistrationsController do
       end
 
       context "when url responds with non-JSON" do
-        let(:result) { double(class: Net::HTTPSuccess, is_a?: true, body: "invalid json") }
+        let(:result) { instance_double(Net::HTTPSuccess, class: Net::HTTPSuccess, is_a?: true, body: "invalid json") }
 
         it "returns 422" do
           subject
@@ -2013,7 +1966,7 @@ RSpec.describe Lti::RegistrationsController do
       end
 
       context "when url responds with JSON" do
-        let(:result) { double(class: Net::HTTPSuccess, is_a?: true, body: config.to_json) }
+        let(:result) { instance_double(Net::HTTPSuccess, class: Net::HTTPSuccess, is_a?: true, body: config.to_json) }
 
         context "when configuration is invalid" do
           let(:config) { { title: "Title" } }
@@ -2064,7 +2017,6 @@ RSpec.describe Lti::RegistrationsController do
 
     before do
       user_session(admin)
-      account.enable_feature!(:lti_registrations_page)
     end
 
     context "without user session" do
@@ -2084,15 +2036,6 @@ RSpec.describe Lti::RegistrationsController do
       it "returns 403" do
         subject
         expect(response).to be_forbidden
-      end
-    end
-
-    context "with flag disabled" do
-      before { account.disable_feature!(:lti_registrations_page) }
-
-      it "returns 404" do
-        subject
-        expect(response).to be_not_found
       end
     end
 
@@ -2259,6 +2202,7 @@ RSpec.describe Lti::RegistrationsController do
       end
     end
 
+    # TEMPORARY: Manual registrations now merge overlays into configuration
     context "with overlay" do
       let(:params) do
         super().tap do |p|
@@ -2266,19 +2210,11 @@ RSpec.describe Lti::RegistrationsController do
         end
       end
 
-      it "creates a new LTI registration with overlay" do
-        expect { subject }.to change { Lti::Overlay.count }.by(1)
+      it "creates a new LTI registration with overlay merged into config" do
+        expect { subject }.not_to change { Lti::Overlay.count }
         expect(response).to be_successful
 
-        expect(Lti::Overlay.last.data).to eq({ "title" => "different title!" })
-        expect(Lti::Registration.last.lti_overlays.last).to eq(Lti::Overlay.last)
-      end
-
-      it "returns the created overlay in the response" do
-        expect(subject).to be_successful
-
-        expect(response_json[:overlay][:data].with_indifferent_access)
-          .to eq(params[:overlay].with_indifferent_access)
+        expect(Lti::ToolConfiguration.last.title).to eq("different title!")
       end
 
       it "removes scopes from the dev key that are disabled in the overlay" do
@@ -2351,7 +2287,6 @@ RSpec.describe Lti::RegistrationsController do
 
     before do
       user_session(admin)
-      account.enable_feature!(:lti_registrations_page)
       account.enable_feature!(:lti_registrations_next)
     end
 
@@ -2375,15 +2310,6 @@ RSpec.describe Lti::RegistrationsController do
       end
     end
 
-    context "with flag disabled" do
-      before { account.disable_feature!(:lti_registrations_page) }
-
-      it "returns 404" do
-        subject
-        expect(response).to be_not_found
-      end
-    end
-
     context "with new flag disabled" do
       before do
         deployment # create before disabling flag that would otherwise prevent this
@@ -2401,7 +2327,6 @@ RSpec.describe Lti::RegistrationsController do
       let(:registration) { lti_registration_with_tool(account: other_root_account) }
 
       before do
-        other_root_account.enable_feature!(:lti_registrations_page)
         other_root_account.enable_feature!(:lti_registrations_next)
       end
 
@@ -2417,7 +2342,6 @@ RSpec.describe Lti::RegistrationsController do
       let(:deployment) { other_registration.deployments.first }
 
       before do
-        other_account.enable_feature!(:lti_registrations_page)
         other_account.enable_feature!(:lti_registrations_next)
       end
 
@@ -2770,15 +2694,6 @@ RSpec.describe Lti::RegistrationsController do
       end
     end
 
-    context "with flag disabled" do
-      before { account.disable_feature!(:lti_registrations_page) }
-
-      it "returns 404" do
-        subject
-        expect(response).to be_not_found
-      end
-    end
-
     context "with lti_registrations_next flag disabled" do
       before { account.disable_feature!(:lti_registrations_next) }
 
@@ -2888,7 +2803,6 @@ RSpec.describe Lti::RegistrationsController do
     end
 
     before(:once) do
-      account.enable_feature!(:lti_registrations_page)
       account.enable_feature!(:lti_registrations_history)
     end
 
@@ -3122,15 +3036,6 @@ RSpec.describe Lti::RegistrationsController do
       end
     end
 
-    context "with flag disabled" do
-      before { account.disable_feature!(:lti_registrations_page) }
-
-      it "returns 404" do
-        subject
-        expect(response).to have_http_status(:not_found)
-      end
-    end
-
     context "when registration update request does not exist" do
       it "returns 404" do
         get "/api/v1/accounts/#{account.id}/lti_registrations/#{registration.id}/update_requests/#{Lti::RegistrationUpdateRequest.last.id + 1}", as: :json
@@ -3230,15 +3135,6 @@ RSpec.describe Lti::RegistrationsController do
       it "returns 403" do
         subject
         expect(response).to be_forbidden
-      end
-    end
-
-    context "with flag disabled" do
-      before { account.disable_feature!(:lti_registrations_page) }
-
-      it "returns 404" do
-        subject
-        expect(response).to have_http_status(:not_found)
       end
     end
 

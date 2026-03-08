@@ -1375,7 +1375,6 @@ EditView.prototype.afterRender = function () {
   this.$anonymousGradingBox = $('' + ANONYMOUS_GRADING_BOX)
   this.renderModeratedGradingFormFieldGroup()
   this.renderAllowedAttempts()
-  // this.renderEnhancedRubrics()
   this.$graderCommentsVisibleToGradersBox = $('#assignment_grader_comment_visibility')
   this.$gradersAnonymousToGradersLabel = $('label[for="assignment_graders_anonymous_to_graders"]')
   if (this.$similarityDetectionTools.length > 0) {
@@ -1479,8 +1478,6 @@ EditView.prototype.afterRender = function () {
 
 EditView.prototype.toJSON = function () {
   const data = this.assignment.toView()
-  const newQuizzesSurveysFFEnabled =
-    typeof ENV !== 'undefined' && ENV !== null && ENV.FEATURES && ENV.FEATURES.new_quizzes_surveys
 
   return Object.assign(data, {
     assignment_attempts:
@@ -1515,9 +1512,7 @@ EditView.prototype.toJSON = function () {
         ? ENV.ANONYMOUS_INSTRUCTOR_ANNOTATIONS_ENABLED
         : void 0) || false,
     is_horizon_course: !!ENV.horizon_course,
-    newQuizzesSurveysFFEnabled: newQuizzesSurveysFFEnabled && this.assignment.isQuizLTIAssignment(),
     showAnonymousSubmissionSelector:
-      newQuizzesSurveysFFEnabled &&
       this.assignment.isQuizLTIAssignment() &&
       (this.assignment.newQuizzesType() === 'graded_survey' ||
         this.assignment.newQuizzesType() === 'ungraded_survey'),

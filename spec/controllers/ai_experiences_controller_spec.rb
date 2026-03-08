@@ -104,6 +104,25 @@ describe AiExperiencesController do
           expect(exp).not_to have_key("submission_status")
         end
       end
+
+      it "includes facts and pedagogical_guidance for teachers" do
+        published_experience = @course.ai_experiences.create!(
+          title: "Published Experience",
+          facts: "Teacher facts",
+          learning_objective: "Test objective",
+          pedagogical_guidance: "Teacher guidance",
+          workflow_state: "published"
+        )
+
+        get :index, params: { course_id: @course.id }, format: :json
+        json_response = json_parse(response.body)
+        experiences = json_response["experiences"]
+
+        published_exp = experiences.find { |e| e["id"] == published_experience.id }
+        expect(published_exp["facts"]).to eq("Teacher facts")
+        expect(published_exp["pedagogical_guidance"]).to eq("Teacher guidance")
+        expect(published_exp["learning_objective"]).to eq("Test objective")
+      end
     end
 
     context "as student" do
@@ -142,6 +161,41 @@ describe AiExperiencesController do
         get :index, params: { course_id: @course.id }, format: :json
         json_response = json_parse(response.body)
         expect(json_response["can_manage"]).to be false
+      end
+
+      it "does not include facts and pedagogical_guidance for students" do
+        published_experience = @course.ai_experiences.create!(
+          title: "Published Experience",
+          facts: "Secret teacher facts",
+          learning_objective: "Student objective",
+          pedagogical_guidance: "Secret teacher guidance",
+          workflow_state: "published"
+        )
+
+        get :index, params: { course_id: @course.id }, format: :json
+        json_response = json_parse(response.body)
+        experiences = json_response["experiences"]
+
+        published_exp = experiences.find { |e| e["id"] == published_experience.id }
+        expect(published_exp).not_to have_key("facts")
+        expect(published_exp).not_to have_key("pedagogical_guidance")
+      end
+
+      it "includes learning_objective for students" do
+        published_experience = @course.ai_experiences.create!(
+          title: "Published Experience",
+          facts: "Secret teacher facts",
+          learning_objective: "Student can see this",
+          pedagogical_guidance: "Secret teacher guidance",
+          workflow_state: "published"
+        )
+
+        get :index, params: { course_id: @course.id }, format: :json
+        json_response = json_parse(response.body)
+        experiences = json_response["experiences"]
+
+        published_exp = experiences.find { |e| e["id"] == published_experience.id }
+        expect(published_exp["learning_objective"]).to eq("Student can see this")
       end
 
       context "with submission status" do
@@ -354,6 +408,14 @@ describe AiExperiencesController do
         expect(assigns(:active_tab)).to eq("ai_experiences")
         expect(assigns(:page_title)).to eq(@ai_experience.title)
       end
+
+      it "includes facts and pedagogical_guidance in JSON response for teachers" do
+        get :show, params: { course_id: @course.id, id: @ai_experience.id }, format: :json
+        json_response = json_parse(response.body)
+        expect(json_response["facts"]).to eq(@ai_experience.facts)
+        expect(json_response["pedagogical_guidance"]).to eq(@ai_experience.pedagogical_guidance)
+        expect(json_response["learning_objective"]).to eq(@ai_experience.learning_objective)
+      end
     end
 
     context "as student" do
@@ -370,6 +432,21 @@ describe AiExperiencesController do
         get :show, params: { course_id: @course.id, id: @ai_experience.id }, format: :json
         json_response = json_parse(response.body)
         expect(json_response["can_manage"]).to be false
+      end
+
+      it "does not include facts and pedagogical_guidance in JSON response for students" do
+        @ai_experience.update!(workflow_state: "published")
+        get :show, params: { course_id: @course.id, id: @ai_experience.id }, format: :json
+        json_response = json_parse(response.body)
+        expect(json_response).not_to have_key("facts")
+        expect(json_response).not_to have_key("pedagogical_guidance")
+      end
+
+      it "includes learning_objective in JSON response for students" do
+        @ai_experience.update!(workflow_state: "published")
+        get :show, params: { course_id: @course.id, id: @ai_experience.id }, format: :json
+        json_response = json_parse(response.body)
+        expect(json_response["learning_objective"]).to eq(@ai_experience.learning_objective)
       end
 
       it "returns forbidden for unpublished experiences" do
@@ -765,6 +842,18 @@ describe AiExperiencesController do
         get :new, params: { course_id: @course.id }
         expect(assigns(:active_tab)).to eq("ai_experiences")
       end
+
+      it "sets ai_experiences_context_file_upload feature flag in js_env when enabled" do
+        @course.enable_feature!(:ai_experiences_context_file_upload)
+        get :new, params: { course_id: @course.id }
+        expect(assigns[:js_env][:FEATURES][:ai_experiences_context_file_upload]).to be true
+      end
+
+      it "sets ai_experiences_context_file_upload feature flag in js_env when disabled" do
+        @course.disable_feature!(:ai_experiences_context_file_upload)
+        get :new, params: { course_id: @course.id }
+        expect(assigns[:js_env][:FEATURES][:ai_experiences_context_file_upload]).to be false
+      end
     end
 
     context "as student" do
@@ -791,6 +880,18 @@ describe AiExperiencesController do
       it "sets the active tab" do
         get :edit, params: { course_id: @course.id, id: @ai_experience.id }
         expect(assigns(:active_tab)).to eq("ai_experiences")
+      end
+
+      it "sets ai_experiences_context_file_upload feature flag in js_env when enabled" do
+        @course.enable_feature!(:ai_experiences_context_file_upload)
+        get :edit, params: { course_id: @course.id, id: @ai_experience.id }
+        expect(assigns[:js_env][:FEATURES][:ai_experiences_context_file_upload]).to be true
+      end
+
+      it "sets ai_experiences_context_file_upload feature flag in js_env when disabled" do
+        @course.disable_feature!(:ai_experiences_context_file_upload)
+        get :edit, params: { course_id: @course.id, id: @ai_experience.id }
+        expect(assigns[:js_env][:FEATURES][:ai_experiences_context_file_upload]).to be false
       end
     end
 

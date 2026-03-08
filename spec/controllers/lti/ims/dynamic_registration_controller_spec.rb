@@ -23,6 +23,9 @@ require "lib/lti/ims/advantage_access_token_shared_context"
 describe Lti::IMS::DynamicRegistrationController do
   include_context "advantage access token context"
 
+  let_once(:openapi_location) { File.join(File.dirname(__FILE__), "openapi", "dynamic_registration.yml").freeze }
+  let_once(:openapi_spec) { YAML.load_file(openapi_location).freeze }
+
   let(:controller_routes) do
     dynamic_registration_routes = []
     CanvasRails::Application.routes.routes.each do |route|
@@ -32,13 +35,8 @@ describe Lti::IMS::DynamicRegistrationController do
     dynamic_registration_routes
   end
 
-  openapi_location = File.join(File.dirname(__FILE__), "openapi", "dynamic_registration.yml")
-  openapi_spec = YAML.load_file(openapi_location)
-
-  verifier = OpenApiSpecHelper::SchemaVerifier.new(openapi_spec)
-
   after do
-    verifier.verify(request, response) if response.sent?
+    OpenApiSpecHelper::SchemaVerifier.new(openapi_spec).verify(request, response) if response.sent?
   end
 
   it "has openapi documentation for each of our controller routes" do
@@ -171,7 +169,7 @@ describe Lti::IMS::DynamicRegistrationController do
           created_registration = Lti::IMS::Registration.last
           expect(created_registration.privacy_level).to eq("email_only")
           expect(created_registration).not_to be_nil
-          expect(parsed_body["https://purl.imsglobal.org/spec/lti-tool-configuration"]["https://canvas.instructure.com/lti/registration_config_url"]).to eq "http://test.host/api/lti/registrations/#{created_registration.global_id}/view"
+          expect(parsed_body["https://purl.imsglobal.org/spec/lti-tool-configuration"]["https://canvas.instructure.com/lti/registration_config_url"]).to eq "http://test.host/api/lti/accounts/#{created_registration.lti_registration.account.global_id}/registrations/#{created_registration.global_id}/view"
           expect(created_registration.canvas_configuration["custom_fields"]).to eq({ "global_foo" => "global_bar" })
           expect(created_registration.unified_tool_id).to eq("asdf")
           expect(created_registration.registration_url).to eq("https://example.com/registration")
@@ -302,7 +300,7 @@ describe Lti::IMS::DynamicRegistrationController do
               created_registration = Lti::IMS::Registration.last
               expect(created_registration.privacy_level).to eq("email_only")
               expect(created_registration).not_to be_nil
-              expect(parsed_body["https://purl.imsglobal.org/spec/lti-tool-configuration"]["https://canvas.instructure.com/lti/registration_config_url"]).to eq "http://test.host/api/lti/registrations/#{created_registration.global_id}/view"
+              expect(parsed_body["https://purl.imsglobal.org/spec/lti-tool-configuration"]["https://canvas.instructure.com/lti/registration_config_url"]).to eq "http://test.host/api/lti/accounts/#{created_registration.lti_registration.account.global_id}/registrations/#{created_registration.global_id}/view"
               expect(created_registration.canvas_configuration["custom_fields"]).to eq({ "global_foo" => "global_bar" })
               expect(created_registration.unified_tool_id).to eq("asdf")
               expect(created_registration.registration_url).to eq("https://example.com/registration")
@@ -809,7 +807,6 @@ describe Lti::IMS::DynamicRegistrationController do
           id
           lti_registration_id
           developer_key_id
-          overlay
           lti_tool_configuration
           application_type
           grant_types
@@ -997,7 +994,7 @@ describe Lti::IMS::DynamicRegistrationController do
 
     it "returns unauthorized if jwt is issued for other user" do
       expired_jwt = Canvas::Security.create_jwt({
-                                                  user_id: 123,
+                                                  user_id: @admin.id + 1,
                                                   root_account_global_id: Account.default.id
                                                 },
                                                 5.minutes.from_now)
@@ -1047,13 +1044,13 @@ describe Lti::IMS::DynamicRegistrationController do
       expect(response).to have_http_status(:not_found)
     end
 
-    it "returns an Lti::IMS::Registration with it's configuration and overlay" do
+    it "returns an Lti::IMS::Registration with it's configuration" do
       user_session(admin)
-      registration = lti_ims_registration_model(account: Account.default, registration_overlay: { "description" => "test" })
+      registration = lti_ims_registration_model(account: Account.default)
       get :ims_registration_by_uuid, params: { account_id: Account.default.id, registration_uuid: registration.guid }
       expect(response).to be_successful
       expect(response.parsed_body["lti_tool_configuration"].with_indifferent_access).to eq(registration.lti_tool_configuration.with_indifferent_access)
-      expect(response.parsed_body["overlay"].with_indifferent_access).to eq(registration.registration_overlay.with_indifferent_access)
+      expect(response.parsed_body["overlay"]).to be_nil
     end
   end
 
@@ -1099,14 +1096,16 @@ describe Lti::IMS::DynamicRegistrationController do
     let(:registration) { lti_ims_registration_model(account:) }
     let(:user) { account_admin_user(account:) }
 
-    it "updates the registration_overlay on the registration" do
+    it "updates the Lti::Overlay for the registration" do
       user_session(user)
       put :update_registration_overlay,
           params: { account_id: Account.default.id,
                     registration_id: registration.id },
           body: overlay.to_json
       expect(response).to be_successful
-      expect(registration.reload.registration_overlay).to eq(overlay.deep_stringify_keys)
+      overlay_data = registration.lti_registration.overlay_for(account).data
+      expect(overlay_data["disabled_placements"]).to eq(overlay[:disabledPlacements])
+      expect(overlay_data["disabled_scopes"]).to eq(overlay[:disabledScopes])
     end
 
     it "removes disabled scopes from the associated developer key" do
@@ -1127,7 +1126,9 @@ describe Lti::IMS::DynamicRegistrationController do
           body: overlay.except(:disabledScopes).to_json
       expect(response).to be_successful
 
-      expect(registration.reload.registration_overlay).to eq(overlay.except(:disabledScopes).deep_stringify_keys)
+      overlay_data = registration.lti_registration.overlay_for(account).data
+      expect(overlay_data["disabled_placements"]).to eq(overlay[:disabledPlacements])
+      expect(overlay_data["disabled_scopes"]).to be_nil
     end
 
     it "returns a 422 if the request body does not meet the schema" do
@@ -1189,12 +1190,11 @@ describe Lti::IMS::DynamicRegistrationController do
         lti_overlay
       end
 
-      it "updates the registration and Lti::Overlay model" do
+      it "updates the Lti::Overlay model" do
         user_session(user)
         put :update_registration_overlay, params: { account_id: Account.default.id, registration_id: registration.id }, body: overlay.to_json
 
         expect(response).to be_successful
-        expect(registration.reload.registration_overlay).to eq(overlay.deep_stringify_keys)
         expect(lti_overlay.reload.updated_by).to eq(user)
         expect(lti_overlay.data).to eq({
                                          "disabled_placements" => ["course_navigation"],
@@ -1214,12 +1214,11 @@ describe Lti::IMS::DynamicRegistrationController do
           lti_overlay.update_column(:updated_by_id, nil)
         end
 
-        it "updates the registration and Lti::Overlay model" do
+        it "updates the Lti::Overlay model" do
           user_session(user)
           put :update_registration_overlay, params: { account_id: Account.default.id, registration_id: registration.id }, body: overlay.to_json
 
           expect(response).to be_successful
-          expect(registration.reload.registration_overlay).to eq(overlay.deep_stringify_keys)
           expect(lti_overlay.reload.updated_by).to eq(user)
           expect(lti_overlay.data).to eq({
                                            "disabled_placements" => ["course_navigation"],

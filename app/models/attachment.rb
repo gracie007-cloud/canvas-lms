@@ -961,6 +961,14 @@ class Attachment < ActiveRecord::Base
     !!instfs_uuid
   end
 
+  def kaltura_media?
+    return false unless CanvasKaltura::ClientV3.config
+    return false if media_entry_id.blank? || media_entry_id == "maybe"
+    return false unless media_object_by_media_id
+
+    true
+  end
+
   def downloadable?
     instfs_hosted? || !!authenticated_s3_url
   rescue
@@ -987,6 +995,16 @@ class Attachment < ActiveRecord::Base
 
   def public_download_url(expires_in: url_ttl, no_jti: false)
     public_url(expires_in:, no_jti:, download: true)
+  end
+
+  def kaltura_media_download_url
+    return nil unless kaltura_media?
+
+    kaltura_client = CanvasKaltura::ClientV3.new
+    download_url = kaltura_client.media_download_url(media_object_by_media_id.media_id)
+    return nil if download_url.nil?
+
+    UrlHelper.add_query_params(download_url, filename: display_name)
   end
 
   def url_ttl
@@ -1059,7 +1077,7 @@ class Attachment < ActiveRecord::Base
   # computed (during the download if possible) and a CorruptedDownload error
   # will be raised if it doesn't match the stored value.
   def open(temp_folder: nil, integrity_check: false, &block)
-    if instfs_hosted?
+    if instfs_hosted? || kaltura_media?
       if block
         streaming_download(integrity_check:, &block)
       else
@@ -2029,6 +2047,14 @@ class Attachment < ActiveRecord::Base
     return unless child
     raise "must be a child" unless child.root_attachment_id == id
 
+    if !instfs_hosted? && %w[ContentMigration ContentExport].include?(context_type) && Attachment.s3_storage? && !s3object.exists?
+      child.workflow_state = child.file_state = "deleted"
+      child.root_attachment_id = nil
+      child.deleted_at ||= Time.now.utc
+      child.save!
+      return make_childless
+    end
+
     child.root_attachment_id = nil
     copy_attachment_content(child, split_root_attachment: true)
     child.save!
@@ -2630,7 +2656,7 @@ class Attachment < ActiveRecord::Base
                               else
                                 begin
                                   attachment.copy_attachment_content(new_attachment)
-                                rescue Aws::S3::Errors::NoSuchKey => e
+                                rescue Aws::S3::Errors::NoSuchKey, CanvasHttp::InvalidResponseCodeError => e
                                   Canvas::Errors.capture_exception(:attachment, e, :warn)
                                   next
                                 end
@@ -2797,7 +2823,9 @@ class Attachment < ActiveRecord::Base
     end
 
     validate_hash(enable: integrity_check) do |hash_context|
-      CanvasHttp.get(public_url(internal: true)) do |response|
+      download_url = kaltura_media_download_url || public_url(internal: true)
+
+      CanvasHttp.get(download_url) do |response|
         raise FailedResponse, "Expected 200, got #{response.code}: #{response.body}" unless response.code.to_i == 200
 
         response.read_body do |data|

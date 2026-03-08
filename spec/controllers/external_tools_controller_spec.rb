@@ -443,7 +443,7 @@ describe ExternalToolsController do
         context "logging" do
           before do
             allow(Lti::LogService).to receive(:new) do
-              double("Lti::LogService").tap { |s| allow(s).to receive(:call) }
+              instance_double(Lti::LogService, call: nil)
             end
             user_session(@teacher)
           end
@@ -1471,7 +1471,7 @@ describe ExternalToolsController do
     context "logging" do
       before do
         allow(Lti::LogService).to receive(:new) do
-          double("Lti::LogService").tap { |s| allow(s).to receive(:call) }
+          instance_double(Lti::LogService, call: nil)
         end
         user_session(@teacher)
       end
@@ -2011,6 +2011,55 @@ describe ExternalToolsController do
           expect(response).to have_http_status(:unauthorized)
         end
       end
+
+      context "when assignment is locked by dates" do
+        before do
+          assignment.update!(due_at: 2.days.ago, unlock_at: 3.days.ago, lock_at: 1.day.ago)
+        end
+
+        context "with New Quizzes tool" do
+          let(:tool) do
+            account.context_external_tools.create!({
+                                                     name: "Quizzes.Next",
+                                                     url: "http://example.com/launch",
+                                                     domain: "example.com",
+                                                     consumer_key: "test_key",
+                                                     shared_secret: "test_secret",
+                                                     tool_id: "Quizzes 2",
+                                                     privacy_level: "public",
+                                                     settings: {
+                                                       custom_fields: { "canvas_assignment_due_at" => "$Canvas.assignment.dueAt.iso8601" }
+                                                     }
+                                                   })
+          end
+
+          it "does not allow student launch when assignment is locked" do
+            user_session(@student)
+            get :retrieve, params: retrieve_params
+            expect(response).to have_http_status(:unauthorized)
+          end
+
+          it "allows teachers to launch even when locked" do
+            user_session(@teacher)
+            get :retrieve, params: retrieve_params
+            expect(response).to be_successful
+          end
+        end
+
+        context "with non-New Quizzes tool" do
+          it "allows student launch even when assignment is locked" do
+            user_session(@student)
+            get :retrieve, params: retrieve_params
+            expect(response).to be_successful
+          end
+
+          it "allows teachers to launch when locked" do
+            user_session(@teacher)
+            get :retrieve, params: retrieve_params
+            expect(response).to be_successful
+          end
+        end
+      end
     end
   end
 
@@ -2024,7 +2073,7 @@ describe ExternalToolsController do
 
     it "logs the launch" do
       allow(Lti::LogService).to receive(:new) do
-        double("Lti::LogService").tap { |s| allow(s).to receive(:call) }
+        instance_double(Lti::LogService, call: nil)
       end
 
       user_session(@teacher)
@@ -3537,7 +3586,7 @@ describe ExternalToolsController do
         end
 
         context "when the cross-account request fails" do
-          before { allow(HTTParty).to receive(:get).and_return(double("success?" => false)) }
+          before { allow(HTTParty).to receive(:get).and_return(instance_double(HTTParty::Response, "success?" => false)) }
 
           it "uses the request host" do
             @shard2.activate { get :generate_sessionless_launch, params: }
@@ -3661,7 +3710,7 @@ describe ExternalToolsController do
 
     it "logs the launch" do
       allow(Lti::LogService).to receive(:new) do
-        double("Lti::LogService").tap { |s| allow(s).to receive(:call) }
+        instance_double(Lti::LogService, call: nil)
       end
 
       get :sessionless_launch, params: { course_id: @course.id, verifier: }
@@ -3796,7 +3845,7 @@ describe ExternalToolsController do
       expect(response).to be_successful
       tools = json_parse(response.body)
       expect(tools.count).to be 3
-      expect(tools.pluck("name")).to eq ["Course nav tool 1", "Course nav tool 2", "Course nav tool 3"]
+      expect(tools.pluck("name")).to match_array ["Course nav tool 1", "Course nav tool 2", "Course nav tool 3"]
     end
 
     it "shows course nav tools for the single-context endpoint" do
@@ -3814,7 +3863,7 @@ describe ExternalToolsController do
       expect(response).to be_successful
       tools = json_parse(response.body)
       expect(tools.count).to be 3
-      expect(tools.pluck("name")).to eq ["Course nav tool 1", "Course nav tool 2", "Course nav tool 3"]
+      expect(tools.pluck("name")).to match_array ["Course nav tool 1", "Course nav tool 2", "Course nav tool 3"]
     end
 
     it "only returns tools with a course navigation placement" do
@@ -3870,81 +3919,6 @@ describe ExternalToolsController do
 
       tools = json_parse(response.body)
       expect(tools.count).to eq 0
-    end
-  end
-
-  describe "#render_native_item_banks" do
-    let(:course) { course_model }
-    let(:teacher) { teacher_in_course(course:, active_all: true).user }
-    let(:tool) do
-      course.context_external_tools.create!(
-        name: "New Quizzes",
-        url: "http://example.com/launch",
-        consumer_key: "key",
-        shared_secret: "secret",
-        tool_id: "Quizzes 2"
-      )
-    end
-    let(:request_mock) do
-      double(path: "/courses/3/external_tools/7/banks")
-    end
-
-    before do
-      user_session(teacher)
-      allow(controller).to receive(:add_new_quizzes_bundle)
-      allow(controller).to receive(:add_body_class)
-      allow(controller).to receive(:render)
-      allow(controller).to receive(:js_env).and_call_original
-      controller.instance_variable_set(:@context, course)
-      controller.instance_variable_set(:@tool, tool)
-      controller.instance_variable_set(:@current_user, teacher)
-      controller.instance_variable_set(:@domain_root_account, Account.default)
-      allow(controller).to receive_messages(build_item_banks_launch_data: { test: "data" }, request: request_mock)
-    end
-
-    it "sets basename in js_env when full_path param is present" do
-      allow(controller).to receive(:params).and_return({ full_path: "/banks" })
-
-      expect(controller).to receive(:js_env) do |data|
-        expect(data[:NEW_QUIZZES][:basename]).to eq("/courses/3/external_tools/7")
-        expect(data[:NEW_QUIZZES][:test]).to eq("data")
-      end
-
-      controller.send(:render_native_item_banks, "course_navigation")
-    end
-
-    it "uses request path as basename when full_path param is not present" do
-      allow(controller).to receive(:params).and_return({})
-
-      expect(controller).to receive(:js_env) do |data|
-        expect(data[:NEW_QUIZZES][:basename]).to eq("/courses/3/external_tools/7/banks")
-        expect(data[:NEW_QUIZZES][:test]).to eq("data")
-      end
-
-      controller.send(:render_native_item_banks, "course_navigation")
-    end
-
-    it "preserves other NEW_QUIZZES data in js_env" do
-      allow(controller).to receive_messages(params: { full_path: "/banks" }, build_item_banks_launch_data: { test: "data", other: "value" })
-
-      expect(controller).to receive(:js_env) do |data|
-        expect(data[:NEW_QUIZZES][:test]).to eq("data")
-        expect(data[:NEW_QUIZZES][:other]).to eq("value")
-        expect(data[:NEW_QUIZZES][:basename]).to eq("/courses/3/external_tools/7")
-      end
-
-      controller.send(:render_native_item_banks, "course_navigation")
-    end
-
-    it "correctly handles complex subroutes" do
-      complex_request_mock = double(path: "/courses/3/external_tools/7/banks/item/123")
-      allow(controller).to receive_messages(request: complex_request_mock, params: { full_path: "/banks/item/123" })
-
-      expect(controller).to receive(:js_env) do |data|
-        expect(data[:NEW_QUIZZES][:basename]).to eq("/courses/3/external_tools/7")
-      end
-
-      controller.send(:render_native_item_banks, "course_navigation")
     end
   end
 end

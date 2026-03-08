@@ -1617,7 +1617,8 @@ class CoursesController < ApplicationController
         can_allow_course_admin_actions: @context.grants_right?(@current_user, session, :allow_course_admin_actions),
         add_tool_manually: @context.grants_right?(@current_user, session, :manage_lti_add),
         edit_tool_manually: @context.grants_right?(@current_user, session, :manage_lti_edit),
-        delete_tool_manually: @context.grants_right?(@current_user, session, :manage_lti_delete)
+        delete_tool_manually: @context.grants_right?(@current_user, session, :manage_lti_delete),
+        manage_course_content_edit: @context.grants_right?(@current_user, session, :manage_course_content_edit)
       }
 
       js_env({
@@ -1913,9 +1914,8 @@ class CoursesController < ApplicationController
   def update_nav
     get_context
     if authorized_action(@context, @current_user, :update)
-      @context.tab_configuration = NavMenuLinkTabs.create_and_delete_links(
-        context: @context,
-        nav_type: "course",
+      @context.tab_configuration = NavMenuLinkTabs.sync_course_links_with_tabs(
+        course: @context,
         tabs: JSON.parse(params[:tabs_json]).compact
       )
       @context.save
@@ -2430,10 +2430,12 @@ class CoursesController < ApplicationController
             QUIZ_LTI_ENABLED: @context.feature_enabled?(:quizzes_next) &&
               !@context.root_account.feature_enabled?(:newquizzes_on_quiz_page) &&
               @context.quiz_lti_tool.present?,
+            # Exposed at top level for consistency with other pages from which the AssignTo modal is accessed
+            # such as assignment index, modules, individual assignment and assignment create/edit pages
+            PEER_REVIEW_ALLOCATION_AND_GRADING_ENABLED: @context.feature_enabled?(:peer_review_allocation_and_grading),
             FLAGS: {
               newquizzes_on_quiz_page: @context.root_account.feature_enabled?(:newquizzes_on_quiz_page),
               show_additional_speed_grader_link: Account.site_admin.feature_enabled?(:additional_speedgrader_links),
-              peer_review_allocation_and_grading: @context.feature_enabled?(:peer_review_allocation_and_grading)
             }
           )
           js_env(COURSE_HOME: true)
@@ -4413,7 +4415,8 @@ class CoursesController < ApplicationController
     return render_unauthorized_action unless @current_user.present?
 
     @user = (params[:user_id] == "self") ? @current_user : api_find(User, params[:user_id])
-    unless @user.grants_right?(@current_user, :read) || @user.check_accounts_any_right?(@current_user, *RoleOverride::MANAGE_TEMPORARY_ENROLLMENT_PERMISSIONS)
+    acceptable_rights = %i[read_roster manage_students allow_course_admin_actions] + RoleOverride::MANAGE_TEMPORARY_ENROLLMENT_PERMISSIONS
+    unless @user.grants_right?(@current_user, :read) || @user.check_accounts_any_right?(@current_user, *acceptable_rights)
       render_unauthorized_action
     end
   end
@@ -4623,6 +4626,7 @@ class CoursesController < ApplicationController
       :conditional_release,
       :post_manually,
       :horizon_course,
+      :career_learning_library_only,
       :disable_csp,
       :default_student_gradebook_view
     )

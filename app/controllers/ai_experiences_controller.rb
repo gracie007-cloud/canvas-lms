@@ -107,7 +107,7 @@ class AiExperiencesController < ApplicationController
         render
       end
       format.json do
-        experiences_json = can_manage ? experiences_json_for_teacher : experiences_json_for_student
+        experiences_json = can_manage ? experiences_json_for_teacher(can_manage) : experiences_json_for_student(can_manage)
         render json: {
           experiences: experiences_json,
           can_manage:
@@ -155,6 +155,8 @@ class AiExperiencesController < ApplicationController
     add_crumb t("#crumbs.new_ai_experience", "New AI Experience")
     @page_title = t("#page_title.new_ai_experience", "New AI Experience")
     js_env({ COURSE_ID: @context.id })
+    js_env[:FEATURES] ||= {}
+    js_env[:FEATURES][:ai_experiences_context_file_upload] = @context.feature_enabled?(:ai_experiences_context_file_upload)
   end
 
   # @API Show edit AI experience form
@@ -166,6 +168,8 @@ class AiExperiencesController < ApplicationController
     add_crumb @experience.title
     @page_title = t("#page_title.edit_ai_experience", "Edit %{title}", title: @experience.title)
     js_env({ COURSE_ID: @context.id, AI_EXPERIENCE_ID: params[:id] })
+    js_env[:FEATURES] ||= {}
+    js_env[:FEATURES][:ai_experiences_context_file_upload] = @context.feature_enabled?(:ai_experiences_context_file_upload)
   end
 
   # @API Create an AI experience
@@ -424,11 +428,11 @@ class AiExperiencesController < ApplicationController
     end
   end
 
-  def experiences_json_for_teacher
-    ai_experiences_json(@experiences, @current_user, session)
+  def experiences_json_for_teacher(can_manage)
+    ai_experiences_json(@experiences, @current_user, session, can_manage:)
   end
 
-  def experiences_json_for_student
+  def experiences_json_for_student(can_manage)
     @experiences.map do |experience|
       # Query for the student's latest conversation for this experience
       latest_conversation = experience.ai_conversations
@@ -446,7 +450,7 @@ class AiExperiencesController < ApplicationController
                             "in_progress"
                           end
 
-      ai_experience_json(experience, @current_user, session, { submission_status: })
+      ai_experience_json(experience, @current_user, session, { submission_status:, can_manage: })
     end
   end
 end

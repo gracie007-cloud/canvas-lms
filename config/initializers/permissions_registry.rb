@@ -343,7 +343,6 @@ BASE_PERMISSIONS = {
     account_only: true,
     true_for: %w[AccountAdmin],
     available_to: %w[AccountAdmin AccountMembership],
-    account_allows: ->(a) { a.root_account.feature_enabled?(:lti_registrations_page) },
     account_details: [
       { title: -> { I18n.t("LTI Registrations - Manage") },
         description: -> { I18n.t("Allows users to view, add, modify, and delete LTI 1.3 tool registrations on the new Apps page.") } }
@@ -2151,12 +2150,22 @@ BASE_PERMISSIONS = {
     ]
   },
   view_title_iv_financial_aid_report: {
-    label: -> { I18n.t("Financial Aid Compliance") },
+    label: -> { I18n.t("Title IV Financial Aid Report") },
     group: :view_advanced_analytics,
     available_to: %w[AccountAdmin AccountMembership],
     true_for: %w[AccountAdmin],
     account_only: true,
-    account_allows: ->(a) { a.feature_enabled?(:title_iv_financial_aid_report) }
+    account_allows: ->(a) { a.feature_enabled?(:title_iv_financial_aid_report) },
+    account_details: [
+      { title: -> { I18n.t("Account Settings") },
+        description: -> { I18n.t("Allows an account administrator to access the Title IV Financial Aid Report in Intelligent Insights.") } },
+      { title: -> { I18n.t("Subaccounts") },
+        description: -> { I18n.t("Provides scoped access to the Title IV Financial Aid Report.") } }
+    ],
+    account_considerations: [
+      { title: -> { I18n.t("Intelligent Insights") },
+        description: -> { I18n.t("The Title IV Financial Aid Report is part of the Intelligent Insights upgrade in Canvas.") } }
+    ]
   },
   view_rsi_report: {
     label: -> { I18n.t("Regular and Substantive Interaction") },
@@ -2164,7 +2173,18 @@ BASE_PERMISSIONS = {
     available_to: %w[AccountAdmin AccountMembership],
     true_for: %w[AccountAdmin],
     account_only: true,
-    account_allows: ->(a) { a.feature_enabled?(:intelligent_insights_rsi_report) }
+    account_allows: ->(a) { a.feature_enabled?(:intelligent_insights_rsi_report) },
+    account_details: [
+      { title: -> { I18n.t("Account Settings") },
+        description: -> { I18n.t("Allows an account administrator to access the Regular and Substantive Interaction Insights feature of Intelligent Insights.") } },
+      { title: -> { I18n.t("Subaccounts") },
+        description: -> { I18n.t("Provides scoped access to the Regular and Substantive Interaction Insights feature.") } }
+    ],
+    account_considerations: [
+      { title: -> { I18n.t("Intelligent Insights") },
+        description: -> { I18n.t("Regular and Substantive Interaction Insights is part of the Intelligent Insights upgrade in Canvas.") } }
+    ]
+
   },
   view_accessibility_insights: {
     label: -> { I18n.t("Accessibility Insights") },
@@ -2189,16 +2209,30 @@ BASE_PERMISSIONS = {
     ]
   },
   access_oak: {
-    label: -> { I18n.t("IgniteAI Agent") },
+    label: -> { I18n.t("IgniteAI Agent - Admins") },
     available_to: %w[AccountAdmin AccountMembership],
-    true_for: [],
+    true_for: %w[AccountAdmin],
     account_allows: ->(a) { a.feature_enabled?(:oak_for_admins) },
     details: [
-      { title: -> { I18n.t("IgniteAI Agent") },
+      { title: -> { I18n.t("IgniteAI Agent - Admins") },
         description: -> { I18n.t("Allows user to access the IgniteAI Agent for Canvas LMS.") } }
     ],
     considerations: [
-      { title: -> { I18n.t("IgniteAI Agent") },
+      { title: -> { I18n.t("IgniteAI Agent - Admins") },
+        description: -> { I18n.t("The IgniteAI Agent feature flag must be enabled for the account to assign this permission.") } }
+    ]
+  },
+  access_oak_teacher: {
+    label: -> { I18n.t("IgniteAI Agent - Faculty & Support") },
+    available_to: %w[TeacherEnrollment TaEnrollment DesignerEnrollment AccountAdmin AccountMembership],
+    true_for: %w[AccountAdmin],
+    account_allows: ->(a) { a.feature_enabled?(:oak_for_teachers) },
+    details: [
+      { title: -> { I18n.t("IgniteAI Agent - Faculty & Support") },
+        description: -> { I18n.t("Allows user to access the IgniteAI Agent for Canvas LMS.") } }
+    ],
+    considerations: [
+      { title: -> { I18n.t("IgniteAI Agent - Faculty & Support") },
         description: -> { I18n.t("The IgniteAI Agent feature flag must be enabled for the account to assign this permission.") } }
     ]
   },

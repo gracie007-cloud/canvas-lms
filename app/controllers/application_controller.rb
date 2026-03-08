@@ -33,7 +33,6 @@ class ApplicationController < ActionController::Base
   include Api::V1::WikiPage
   include LegalInformationHelper
   include ObserverEnrollmentsHelper
-  include NewQuizzesHelper
 
   helper :all
 
@@ -381,7 +380,7 @@ class ApplicationController < ActionController::Base
         @js_env[:K5_HOMEROOM_COURSE] = @context.is_a?(Course) && @context.elementary_homeroom_course?
         @js_env[:K5_SUBJECT_COURSE] = @context.is_a?(Course) && @context.elementary_subject_course?
         @js_env[:LOCALE_TRANSLATION_FILE] = helpers.path_to_asset("javascripts/translations/#{@js_env[:LOCALES].first}.json")
-        @js_env[:ACCOUNT_ID] = effective_account_id(@context)
+        @js_env[:ACCOUNT_ID] = effective_account_attribute(@context, :id)
         @js_env[:user_cache_key] = CanvasSecurity.hmac_sha512(@current_user.uuid) if @current_user.present?
         @js_env[:top_navigation_tools] = external_tools_display_hashes(:top_navigation) if !!@domain_root_account&.feature_enabled?(:top_navigation_placement)
         @js_env[:horizon_course] = @context.is_a?(Course) && @context.horizon_course?
@@ -394,22 +393,42 @@ class ApplicationController < ActionController::Base
                                     end
         if load_usage_metrics? && @domain_root_account&.feature_enabled?(:pendo_extended)
           @js_env[:USAGE_METRICS_METADATA] ||= {}
-          @js_env[:USAGE_METRICS_METADATA][:sub_account_id] = effective_account_id(@context)
-          @js_env[:USAGE_METRICS_METADATA][:sub_account_name] = effective_account_name(@context)
+          @js_env[:USAGE_METRICS_METADATA][:instance_domain] = HostUrl.context_host(@domain_root_account, request.host)
+          @js_env[:USAGE_METRICS_METADATA][:sub_account_id] = effective_account_attribute(@context, :id)
+          @js_env[:USAGE_METRICS_METADATA][:sub_account_name] = effective_account_attribute(@context, :name)
+          @js_env[:USAGE_METRICS_METADATA][:sub_account_sis_id] = effective_account_attribute(@context, :sis_source_id)
+          @js_env[:USAGE_METRICS_METADATA][:user_id] = @current_user&.id
+          @js_env[:USAGE_METRICS_METADATA][:user_uuid] = @current_user&.uuid
+          @js_env[:USAGE_METRICS_METADATA][:user_sis_id] = @current_pseudonym&.sis_user_id
+          @js_env[:USAGE_METRICS_METADATA][:user_display_name] = @current_user&.short_name
+          @js_env[:USAGE_METRICS_METADATA][:user_email] = @current_user&.email
+          @js_env[:USAGE_METRICS_METADATA][:user_time_zone] = @current_user&.time_zone
 
           if @context.is_a?(Course)
             @js_env[:USAGE_METRICS_METADATA][:course_id] = @context.id
             @js_env[:USAGE_METRICS_METADATA][:course_long_name] = "#{@context.name} - #{@context.short_name}"
+            @js_env[:USAGE_METRICS_METADATA][:course_status] = @context.workflow_state
+            @js_env[:USAGE_METRICS_METADATA][:course_is_blueprint] = MasterCourses::MasterTemplate.is_master_course?(@context)
+            @js_env[:USAGE_METRICS_METADATA][:course_is_k5] = @context.elementary_subject_course?
+            @js_env[:USAGE_METRICS_METADATA][:course_has_no_students] = !@context.student_enrollments.exists?
             @js_env[:USAGE_METRICS_METADATA][:course_sis_source_id] = @context.sis_source_id
             @js_env[:USAGE_METRICS_METADATA][:course_sis_batch_id] = @context.sis_batch_id
             @js_env[:USAGE_METRICS_METADATA][:course_enrollment_term_id] = @context.enrollment_term_id
             @js_env[:USAGE_METRICS_METADATA][:course_enrollment_term_name] = @context.enrollment_term&.name
+            @js_env[:USAGE_METRICS_METADATA][:course_enrollment_term_sis_id] = @context.enrollment_term&.sis_source_id
+            @js_env[:USAGE_METRICS_METADATA][:course_enrollment_term_start_at] = @context.enrollment_term&.start_at
+            @js_env[:USAGE_METRICS_METADATA][:course_enrollment_term_end_at] = @context.enrollment_term&.end_at
           end
         end
 
         if @context.is_a?(Course)
           @js_env[:FEATURES][:youtube_overlay] = @context.account.feature_enabled?(:youtube_overlay)
           @js_env[:FEATURES][:rce_studio_embed_improvements] = @context.feature_enabled?(:rce_studio_embed_improvements)
+          @js_env[:FEATURES][:a11y_checker_ai_table_caption_generation] = @context.a11y_checker_ai_table_caption_generation?
+          @js_env[:FEATURES][:a11y_checker_ai_alt_text_generation] = @context.a11y_checker_ai_alt_text_generation?
+          @js_env[:FEATURES][:a11y_checker_close_issues] = @context.a11y_checker_close_issues?
+          @js_env[:FEATURES][:a11y_checker_additional_resources] = @context.a11y_checker_additional_resources?
+          @js_env[:FEATURES][:peer_review_allocation_and_grading] = @context.feature_enabled?(:peer_review_allocation_and_grading)
         end
 
         # partner context data
@@ -456,10 +475,7 @@ class ApplicationController < ActionController::Base
   JS_ENV_SITE_ADMIN_FEATURES = %i[
     account_level_blackout_dates
     assignment_edit_placement_not_on_announcements
-    a11y_checker_ai_alt_text_generation
-    a11y_checker_ai_table_caption_generation
-    a11y_checker_additional_resources
-    a11y_checker_close_issues
+    a11y_checker_ga2_features
     block_content_editor_toolbar_reorder
     commons_new_quizzes
     consolidated_media_player
@@ -485,7 +501,6 @@ class ApplicationController < ActionController::Base
     nav_menu_links
     new_quizzes_media_type
     new_quizzes_navigation_updates
-    new_quizzes_surveys
     permanent_page_links
     rce_a11y_resize
     rce_asr_captioning_improvements
@@ -523,10 +538,11 @@ class ApplicationController < ActionController::Base
     lti_apps_page_instructors
     lti_asset_processor
     lti_asset_processor_discussions
+    lti_deactivate_registrations
     lti_link_to_apps_from_developer_keys
     lti_registrations_discover_page
     lti_registrations_next
-    lti_registrations_page
+    lti_registrations_templates
     lti_registrations_usage_data
     lti_registrations_usage_data_dev
     lti_registrations_usage_data_low_usage
@@ -637,15 +653,15 @@ class ApplicationController < ActionController::Base
   end
   helper_method :render_js_env
 
-  def effective_account_id(context)
+  def effective_account_attribute(context, attribute)
     if context.is_a?(Account)
-      context.id
+      context.send(attribute)
     elsif context.is_a?(Course)
-      context.account_id
+      (attribute == :id) ? context.account_id : context.account.send(attribute)
     elsif context.respond_to?(:context)
-      effective_account_id(context.context)
+      effective_account_attribute(context.context, attribute)
     else
-      @domain_root_account&.id
+      @domain_root_account&.send(attribute)
     end
   end
 
@@ -1974,7 +1990,7 @@ class ApplicationController < ActionController::Base
     return unless page_views_enabled?
 
     page_view_info = CanvasSecurity::PageViewJwt.decode(params[:page_view_token])
-    @page_view = PageView.find_for_update(page_view_info[:request_id])
+    @page_view = PageView.find_for_update(page_view_info[:request_id], page_view_info[:created_at])
     if @page_view
       if @page_view.id
         response.headers["X-Canvas-Page-View-Update-Url"] = page_view_path(
@@ -2352,9 +2368,14 @@ class ApplicationController < ActionController::Base
 
       tag.context_module_action(@current_user, :read)
       if @tool
-        # Check if we should use native New Quizzes experience
+        # Redirect to dedicated New Quizzes controller for native experience
         if @tool.quiz_lti? && new_quizzes_native_experience_enabled?
-          return render_native_new_quizzes
+          redirect_params = { module_item_id: params[:module_item_id] }.compact_blank
+          return redirect_to Services::NewQuizzes::Routes::Redirects.assignment_launch(
+            context: @context,
+            assignment: @assignment,
+            **redirect_params
+          )
         end
 
         log_asset_access(@tool, "external_tools", "external_tools", overwrite: false)
@@ -2685,18 +2706,6 @@ class ApplicationController < ActionController::Base
     feature_enabled?(feature) && service_enabled?(feature)
   end
   helper_method :feature_and_service_enabled?
-
-  def effective_account_name(context)
-    if context.is_a?(Account)
-      context.name
-    elsif context.is_a?(Course)
-      context.account.name
-    elsif context.respond_to?(:context)
-      effective_account_name(context.context)
-    else
-      @domain_root_account&.name
-    end
-  end
 
   def random_lti_tool_form_id
     rand(0..999).to_s
@@ -3529,47 +3538,6 @@ class ApplicationController < ActionController::Base
 
     @context.feature_enabled?(:new_quizzes_native_experience)
   end
-  helper_method :new_quizzes_native_experience_enabled?
-
-  def render_native_new_quizzes
-    add_new_quizzes_bundle
-
-    # Build launch data with HMAC signature for tamper protection
-    signed_launch_data = ::NewQuizzes::LaunchDataBuilder.new(
-      context: @context,
-      assignment: @assignment,
-      tool: @tool,
-      tag: @tag || @module_tag,
-      current_user: @current_user,
-      controller: self,
-      request:,
-      variable_expander: Lti::VariableExpander.new(@domain_root_account, @context, self, {
-                                                     current_user: @current_user,
-                                                     current_pseudonym: @current_pseudonym,
-                                                     assignment: @assignment,
-                                                     content_tag: @module_tag || @tag,
-                                                     launch: @lti_launch,
-                                                     tool: @tool,
-                                                     launch_url: @resource_url
-                                                   })
-    ).build_with_signature
-
-    # Calculate basename by removing the quiz subroute (full_path) from the current path
-    # E.g., /courses/3/assignments/9/moderation/1 -> /courses/3/assignments/9
-    basename = if params[:full_path].present?
-                 request.path.sub(params[:full_path], "")
-               else
-                 request.path
-               end
-
-    signed_launch_data[:basename] = basename
-
-    js_env(NEW_QUIZZES: signed_launch_data)
-
-    add_body_class("native-new-quizzes full-width")
-
-    render "assignments/native_new_quizzes", layout: "application"
-  end
 
   def show_blueprint_button?
     @context.is_a?(Course) && MasterCourses::MasterTemplate.is_master_course?(@context)
@@ -3608,7 +3576,7 @@ class ApplicationController < ActionController::Base
   def widget_dashboard_eligible?
     return false unless @current_user
 
-    @current_user.observer_enrollments.active.any? || !@current_user.non_student_enrollment?
+    @current_user.observer_enrollments.active_or_pending.any? || !@current_user.active_non_student_enrollment?
   end
 
   def use_classic_font?

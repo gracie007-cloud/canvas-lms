@@ -76,6 +76,7 @@ class DeveloperKey < ActiveRecord::Base
   before_validation :normalize_public_jwk_url
   before_validation :normalize_scopes
   before_validation :validate_scopes!
+  before_validation :normalize_public_jwk
   before_create :generate_api_key
   before_create :set_auto_expire_tokens
   before_create :set_visible
@@ -532,6 +533,10 @@ class DeveloperKey < ActiveRecord::Base
     self.public_jwk_url = nil if public_jwk_url.blank?
   end
 
+  def normalize_public_jwk
+    self.public_jwk = nil if public_jwk.blank?
+  end
+
   def normalize_scopes
     self.scopes = scopes.uniq
   end
@@ -631,11 +636,11 @@ class DeveloperKey < ActiveRecord::Base
 
   def tool_management_scope(base_scope, affected_account)
     if affected_account&.site_admin? || affected_account.blank?
-      return base_scope.where(developer_key: self)
+      return base_scope.where(developer_key: self, lti_registration:)
     end
 
     # Don't update tools in another root account on the same shard
-    base_scope.where(developer_key: self, root_account: affected_account)
+    base_scope.where(developer_key: self, lti_registration:, root_account: affected_account)
   end
 
   def update_tools_on_active_shard!(account)

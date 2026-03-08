@@ -2324,6 +2324,49 @@ describe Account do
       expect(account_user1.reload.workflow_state).to eq "deleted"
       expect(account_user2.reload.workflow_state).to eq "deleted"
     end
+
+    it "soft-deletes associated LTI context controls" do
+      user = user_model
+
+      registration = lti_registration_with_tool(account: @root_account)
+      deployment = registration.deployments.first
+
+      # But context controls can be on sub-accounts
+      control = Lti::ContextControl.create!(
+        context: @sub_account,
+        registration:,
+        deployment:
+      )
+
+      expect(control.workflow_state).to eq("active")
+
+      @sub_account.destroy(user:)
+
+      expect(control.reload.workflow_state).to eq("deleted_with_context")
+    end
+
+    it "restores LTI context controls when account is undeleted" do
+      user = user_model
+
+      registration = lti_registration_with_tool(account: @root_account)
+      deployment = registration.deployments.first
+
+      control = Lti::ContextControl.create!(
+        context: @sub_account,
+        registration:,
+        deployment:
+      )
+
+      # Delete the account
+      @sub_account.destroy(user:)
+      expect(control.reload.workflow_state).to eq("deleted_with_context")
+
+      # Undelete the account
+      @sub_account.process_event(:restore)
+      @sub_account.save!
+
+      expect(control.reload.workflow_state).to eq("active")
+    end
   end
 
   context "custom help link validation" do
@@ -2535,32 +2578,49 @@ describe Account do
     end
   end
 
-  describe "native_discovery_enabled setting" do
+  describe "discovery_page_active setting" do
     let(:account) { Account.create!(name: "Test", workflow_state: "active") }
 
-    it "defaults native_discovery_enabled to false" do
-      expect(account.native_discovery_enabled?).to be(false)
-      expect(account.native_discovery_route_active?).to be(false)
+    it "defaults discovery_page_active to false" do
+      expect(account.discovery_page_active?).to be(false)
     end
 
-    it "can enable native_discovery_enabled" do
-      account.native_discovery_enabled = true
-      expect(account.native_discovery_enabled?).to be(true)
-      expect(account.native_discovery_route_active?).to be(true)
+    it "returns false when active is nil" do
+      account.settings[:discovery_page] = { active: nil }
+      expect(account.discovery_page_active?).to be(false)
     end
 
-    it "can disable native_discovery_enabled" do
-      account.native_discovery_enabled = true
-      account.native_discovery_enabled = false
-      expect(account.native_discovery_enabled?).to be(false)
-      expect(account.native_discovery_route_active?).to be(false)
+    it "returns false when discovery_page is not set" do
+      account.settings.delete(:discovery_page)
+      expect(account.discovery_page_active?).to be(false)
+    end
+
+    it "returns true when active is true" do
+      account.settings[:discovery_page] = { active: true }
+      expect(account.discovery_page_active?).to be(true)
+    end
+
+    it "returns false when active is explicitly false" do
+      account.settings[:discovery_page] = { active: false }
+      expect(account.discovery_page_active?).to be(false)
+    end
+
+    it "can enable discovery_page_active" do
+      account.discovery_page_active = true
+      expect(account.discovery_page_active?).to be(true)
+    end
+
+    it "can disable discovery_page_active" do
+      account.discovery_page_active = true
+      account.discovery_page_active = false
+      expect(account.discovery_page_active?).to be(false)
     end
 
     it "coerces string values to boolean" do
-      account.native_discovery_enabled = "true"
-      expect(account.native_discovery_enabled?).to be(true)
-      account.native_discovery_enabled = "false"
-      expect(account.native_discovery_enabled?).to be(false)
+      account.discovery_page_active = "true"
+      expect(account.discovery_page_active?).to be(true)
+      account.discovery_page_active = "false"
+      expect(account.discovery_page_active?).to be(false)
     end
   end
 
@@ -3134,6 +3194,14 @@ describe Account do
       result = account.get_role_by_name(role_name)
       expect(result).to be_nil
     end
+
+    it "returns the most specific role if multiple roles exist in the account chain" do
+      sub_account = account.sub_accounts.create!
+      sub_account.roles.create(name: role_name, base_role_type: "TeacherEnrollment", workflow_state: "active")
+
+      result = sub_account.get_role_by_name(role_name)
+      expect(result.account_id).to eq(sub_account.id)
+    end
   end
 
   describe "horizon account" do
@@ -3639,6 +3707,213 @@ describe Account do
 
       it "returns false when neither a11y_checker nor a11y_checker_ga2_features are enabled" do
         expect(account.a11y_checker_account_statistics?).to be false
+      end
+    end
+  end
+
+  describe "a11y_checker_ai feature methods" do
+    let(:account) { Account.create! }
+    let(:root_account) { account.root_account }
+
+    describe "#a11y_checker_ai_table_caption_generation?" do
+      context "when all three conditions are met" do
+        before do
+          Account.site_admin.enable_feature!(:a11y_checker_ai_table_caption_generation)
+          root_account.enable_feature!(:a11y_checker_ignite_ai)
+        end
+
+        it "returns true when account has a11y_checker enabled" do
+          account.enable_feature!(:a11y_checker)
+          expect(account.a11y_checker_ai_table_caption_generation?).to be true
+        end
+
+        it "returns true when site_admin has a11y_checker_ai_features enabled" do
+          Account.site_admin.enable_feature!(:a11y_checker_ai_features)
+          expect(account.a11y_checker_ai_table_caption_generation?).to be true
+        end
+
+        it "returns true when both a11y_checker and a11y_checker_ai_features are enabled" do
+          account.enable_feature!(:a11y_checker)
+          Account.site_admin.enable_feature!(:a11y_checker_ai_features)
+          expect(account.a11y_checker_ai_table_caption_generation?).to be true
+        end
+      end
+
+      it "returns false when site_admin feature is disabled" do
+        Account.site_admin.disable_feature!(:a11y_checker_ai_table_caption_generation)
+        root_account.enable_feature!(:a11y_checker_ignite_ai)
+        account.enable_feature!(:a11y_checker)
+
+        expect(account.a11y_checker_ai_table_caption_generation?).to be false
+      end
+
+      it "returns false when root_account ignite_ai feature is disabled" do
+        Account.site_admin.enable_feature!(:a11y_checker_ai_table_caption_generation)
+        root_account.disable_feature!(:a11y_checker_ignite_ai)
+        account.enable_feature!(:a11y_checker)
+
+        expect(account.a11y_checker_ai_table_caption_generation?).to be false
+      end
+
+      it "returns false when neither a11y_checker nor a11y_checker_ai_features are enabled" do
+        Account.site_admin.enable_feature!(:a11y_checker_ai_table_caption_generation)
+        root_account.enable_feature!(:a11y_checker_ignite_ai)
+
+        expect(account.a11y_checker_ai_table_caption_generation?).to be false
+      end
+
+      it "returns false when all features are disabled" do
+        Account.site_admin.disable_feature!(:a11y_checker_ai_table_caption_generation)
+        root_account.disable_feature!(:a11y_checker_ignite_ai)
+
+        expect(account.a11y_checker_ai_table_caption_generation?).to be false
+      end
+    end
+
+    describe "#a11y_checker_ai_alt_text_generation?" do
+      context "when all three conditions are met" do
+        before do
+          Account.site_admin.enable_feature!(:a11y_checker_ai_alt_text_generation)
+          root_account.enable_feature!(:a11y_checker_ignite_ai)
+        end
+
+        it "returns true when account has a11y_checker enabled" do
+          account.enable_feature!(:a11y_checker)
+          expect(account.a11y_checker_ai_alt_text_generation?).to be true
+        end
+
+        it "returns true when site_admin has a11y_checker_ai_features enabled" do
+          Account.site_admin.enable_feature!(:a11y_checker_ai_features)
+          expect(account.a11y_checker_ai_alt_text_generation?).to be true
+        end
+
+        it "returns true when both a11y_checker and a11y_checker_ai_features are enabled" do
+          account.enable_feature!(:a11y_checker)
+          Account.site_admin.enable_feature!(:a11y_checker_ai_features)
+          expect(account.a11y_checker_ai_alt_text_generation?).to be true
+        end
+      end
+
+      it "returns false when site_admin feature is disabled" do
+        Account.site_admin.disable_feature!(:a11y_checker_ai_alt_text_generation)
+        root_account.enable_feature!(:a11y_checker_ignite_ai)
+        account.enable_feature!(:a11y_checker)
+
+        expect(account.a11y_checker_ai_alt_text_generation?).to be false
+      end
+
+      it "returns false when root_account ignite_ai feature is disabled" do
+        Account.site_admin.enable_feature!(:a11y_checker_ai_alt_text_generation)
+        root_account.disable_feature!(:a11y_checker_ignite_ai)
+        account.enable_feature!(:a11y_checker)
+
+        expect(account.a11y_checker_ai_alt_text_generation?).to be false
+      end
+
+      it "returns false when neither a11y_checker nor a11y_checker_ai_features are enabled" do
+        Account.site_admin.enable_feature!(:a11y_checker_ai_alt_text_generation)
+        root_account.enable_feature!(:a11y_checker_ignite_ai)
+
+        expect(account.a11y_checker_ai_alt_text_generation?).to be false
+      end
+
+      it "returns false when all features are disabled" do
+        Account.site_admin.disable_feature!(:a11y_checker_ai_alt_text_generation)
+        root_account.disable_feature!(:a11y_checker_ignite_ai)
+
+        expect(account.a11y_checker_ai_alt_text_generation?).to be false
+      end
+    end
+  end
+
+  describe "#a11y_checker_close_issues?" do
+    let(:account) { Account.create! }
+
+    context "when site_admin a11y_checker_close_issues is disabled" do
+      before do
+        Account.site_admin.disable_feature!(:a11y_checker_close_issues)
+      end
+
+      it "returns false even if account has a11y_checker enabled" do
+        account.enable_feature!(:a11y_checker)
+        expect(account.a11y_checker_close_issues?).to be false
+      end
+
+      it "returns false even if site_admin has a11y_checker_ga2_features enabled" do
+        Account.site_admin.enable_feature!(:a11y_checker_ga2_features)
+        expect(account.a11y_checker_close_issues?).to be false
+      end
+    end
+
+    context "when site_admin a11y_checker_close_issues is enabled" do
+      before do
+        Account.site_admin.enable_feature!(:a11y_checker_close_issues)
+      end
+
+      it "returns true when account has a11y_checker enabled" do
+        account.enable_feature!(:a11y_checker)
+        expect(account.a11y_checker_close_issues?).to be true
+      end
+
+      it "returns true when site_admin has a11y_checker_ga2_features enabled" do
+        Account.site_admin.enable_feature!(:a11y_checker_ga2_features)
+        expect(account.a11y_checker_close_issues?).to be true
+      end
+
+      it "returns true when both a11y_checker and a11y_checker_ga2_features are enabled" do
+        account.enable_feature!(:a11y_checker)
+        Account.site_admin.enable_feature!(:a11y_checker_ga2_features)
+        expect(account.a11y_checker_close_issues?).to be true
+      end
+
+      it "returns false when neither a11y_checker nor a11y_checker_ga2_features are enabled" do
+        expect(account.a11y_checker_close_issues?).to be false
+      end
+    end
+  end
+
+  describe "#a11y_checker_additional_resources?" do
+    let(:account) { Account.create! }
+
+    context "when site_admin a11y_checker_additional_resources is disabled" do
+      before do
+        Account.site_admin.disable_feature!(:a11y_checker_additional_resources)
+      end
+
+      it "returns false even if account has a11y_checker enabled" do
+        account.enable_feature!(:a11y_checker)
+        expect(account.a11y_checker_additional_resources?).to be false
+      end
+
+      it "returns false even if site_admin has a11y_checker_ga2_features enabled" do
+        Account.site_admin.enable_feature!(:a11y_checker_ga2_features)
+        expect(account.a11y_checker_additional_resources?).to be false
+      end
+    end
+
+    context "when site_admin a11y_checker_additional_resources is enabled" do
+      before do
+        Account.site_admin.enable_feature!(:a11y_checker_additional_resources)
+      end
+
+      it "returns true when account has a11y_checker enabled" do
+        account.enable_feature!(:a11y_checker)
+        expect(account.a11y_checker_additional_resources?).to be true
+      end
+
+      it "returns true when site_admin has a11y_checker_ga2_features enabled" do
+        Account.site_admin.enable_feature!(:a11y_checker_ga2_features)
+        expect(account.a11y_checker_additional_resources?).to be true
+      end
+
+      it "returns true when both a11y_checker and a11y_checker_ga2_features are enabled" do
+        account.enable_feature!(:a11y_checker)
+        Account.site_admin.enable_feature!(:a11y_checker_ga2_features)
+        expect(account.a11y_checker_additional_resources?).to be true
+      end
+
+      it "returns false when neither a11y_checker nor a11y_checker_ga2_features are enabled" do
+        expect(account.a11y_checker_additional_resources?).to be false
       end
     end
   end

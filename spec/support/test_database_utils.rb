@@ -114,8 +114,7 @@ module TestDatabaseUtils
     end
 
     def truncate_all_tables?
-      # Only account should be the dummy account with id=0
-      Account.where.not(id: 0).any? || Account.where(id: 0).none?
+      !ActiveRecord::Base.connection.non_empty_tables.empty? || !Account.where(id: 0).exists?
     end
 
     def truncate_all_tables!

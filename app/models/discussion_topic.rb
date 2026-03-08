@@ -1110,7 +1110,14 @@ class DiscussionTopic < ActiveRecord::Base
   end
 
   def can_lock?
-    !(assignment.try(:due_at) && assignment.due_at > Time.zone.now)
+    return false if assignment.try(:due_at) && assignment.due_at > Time.zone.now
+
+    if checkpoints?
+      return false if reply_to_topic_checkpoint&.due_at && reply_to_topic_checkpoint.due_at > Time.zone.now
+      return false if reply_to_entry_checkpoint&.due_at && reply_to_entry_checkpoint.due_at > Time.zone.now
+    end
+
+    true
   end
 
   def comments_disabled?
@@ -1430,7 +1437,6 @@ class DiscussionTopic < ActiveRecord::Base
   def initialize_last_reply_at
     unless [:migration, :after_migration].include?(saved_by)
       self.posted_at ||= Time.now.utc
-      self.last_reply_at ||= Time.now.utc
     end
   end
 
@@ -2333,6 +2339,6 @@ class DiscussionTopic < ActiveRecord::Base
   end
 
   def excluded_from_accessibility_scan?
-    !Account.site_admin.feature_enabled?(:a11y_checker_additional_resources) || graded?
+    !context.try(:a11y_checker_additional_resources?) || is_announcement || graded?
   end
 end

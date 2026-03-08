@@ -34,6 +34,10 @@
 #           "description": "Secondary authentication provider buttons displayed less prominently",
 #           "type": "array",
 #           "items": { "$ref": "DiscoveryPageEntry" }
+#         },
+#         "active": {
+#           "description": "Whether the discovery page is enabled",
+#           "type": "boolean"
 #         }
 #       }
 #     }
@@ -53,10 +57,11 @@
 #           "example": "Students",
 #           "type": "string"
 #         },
-#         "icon_url": {
-#           "description": "URL to an icon image for this provider button",
-#           "example": "https://example.com/icons/students.svg",
-#           "type": "string"
+#         "icon": {
+#           "description": "Icon key for this provider button",
+#           "example": "google",
+#           "type": "string",
+#           "enum": ["apple", "auth0", "classlink", "default", "facebook", "github", "google", "linkedin", "microsoft", "okta", "onelogin", "ping"]
 #         }
 #       }
 #     }
@@ -80,7 +85,7 @@ class DiscoveryPagesApiController < ApplicationController
   #         {
   #           "authentication_provider_id": 1,
   #           "label": "Students",
-  #           "icon_url": "https://example.com/icons/students.svg"
+  #           "icon": "google"
   #         }
   #       ],
   #       "secondary": [
@@ -88,7 +93,8 @@ class DiscoveryPagesApiController < ApplicationController
   #           "authentication_provider_id": 3,
   #           "label": "Admins"
   #         }
-  #       ]
+  #       ],
+  #       "active": true
   #     }
   #   }
   def show
@@ -97,6 +103,8 @@ class DiscoveryPagesApiController < ApplicationController
 
   # @API Update Discovery Page
   # Update or create the discovery page configuration for the domain root account.
+  # This is a full replacement - provide the complete configuration including
+  # primary, secondary, and active fields. Any fields omitted will be removed.
   #
   # @argument discovery_page[primary][][authentication_provider_id] [Required, Integer]
   #   The ID of an active authentication provider for this account.
@@ -104,8 +112,8 @@ class DiscoveryPagesApiController < ApplicationController
   # @argument discovery_page[primary][][label] [Required, String]
   #   The display label for this authentication provider button.
   #
-  # @argument discovery_page[primary][][icon_url] [String]
-  #   URL to an icon image for this authentication provider button.
+  # @argument discovery_page[primary][][icon] [String]
+  #   Icon key for this authentication provider button.
   #
   # @argument discovery_page[secondary][][authentication_provider_id] [Required, Integer]
   #   The ID of an active authentication provider for this account.
@@ -113,8 +121,11 @@ class DiscoveryPagesApiController < ApplicationController
   # @argument discovery_page[secondary][][label] [Required, String]
   #   The display label for this authentication provider button.
   #
-  # @argument discovery_page[secondary][][icon_url] [String]
-  #   URL to an icon image for this authentication provider button.
+  # @argument discovery_page[secondary][][icon] [String]
+  #   Icon key for this authentication provider button.
+  #
+  # @argument discovery_page[active] [Boolean]
+  #   Whether the discovery page is enabled. Defaults to false if not provided.
   #
   # @returns DiscoveryPage
   #
@@ -128,12 +139,12 @@ class DiscoveryPagesApiController < ApplicationController
   #           {
   #             "authentication_provider_id": 1,
   #             "label": "Students",
-  #             "icon_url": "https://example.com/icons/students.svg"
+  #             "icon": "google"
   #           },
   #           {
   #             "authentication_provider_id": 2,
   #             "label": "Faculty",
-  #             "icon_url": "https://example.com/icons/faculty.svg"
+  #             "icon": "okta"
   #           }
   #         ],
   #         "secondary": [
@@ -141,7 +152,8 @@ class DiscoveryPagesApiController < ApplicationController
   #             "authentication_provider_id": 3,
   #             "label": "Admins"
   #           }
-  #         ]
+  #         ],
+  #         "active": true
   #       }
   #     }'
   #
@@ -152,12 +164,12 @@ class DiscoveryPagesApiController < ApplicationController
   #         {
   #           "authentication_provider_id": 1,
   #           "label": "Students",
-  #           "icon_url": "https://example.com/icons/students.svg"
+  #           "icon": "google"
   #         },
   #         {
   #           "authentication_provider_id": 2,
   #           "label": "Faculty",
-  #           "icon_url": "https://example.com/icons/faculty.svg"
+  #           "icon": "okta"
   #         }
   #       ],
   #       "secondary": [
@@ -165,7 +177,8 @@ class DiscoveryPagesApiController < ApplicationController
   #           "authentication_provider_id": 3,
   #           "label": "Admins"
   #         }
-  #       ]
+  #       ],
+  #       "active": true
   #     }
   #   }
   def upsert
@@ -178,7 +191,11 @@ class DiscoveryPagesApiController < ApplicationController
   private
 
   def discovery_page
-    context.settings[:discovery_page].presence || {}
+    page = context.settings[:discovery_page].presence || {}
+    page[:primary] ||= []
+    page[:secondary] ||= []
+    page[:active] = context.discovery_page_active?
+    page
   end
 
   def context
@@ -195,8 +212,15 @@ class DiscoveryPagesApiController < ApplicationController
                      Validators::AccountSettingsValidator::DISCOVERY_PAGE_OPTIONAL_KEYS
 
     params.expect(
-      discovery_page: [primary: [permitted_keys],
-                       secondary: [permitted_keys]]
-    ).to_h.deep_symbolize_keys
+      discovery_page: [
+        { primary: [permitted_keys] },
+        { secondary: [permitted_keys] },
+        :active
+      ]
+    ).to_h.deep_symbolize_keys.tap do |expected_params|
+      expected_params[:primary] ||= []
+      expected_params[:secondary] ||= []
+      expected_params[:active] = Canvas::Plugin.value_to_boolean(expected_params[:active])
+    end
   end
 end

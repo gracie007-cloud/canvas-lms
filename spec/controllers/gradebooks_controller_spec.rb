@@ -45,7 +45,7 @@ describe GradebooksController do
         user_session(@student)
         @assignment = @course.assignments.create!(title: "Example Assignment")
         @media_object = MediaObject.create!(media_id: "m-someid", media_type: "video", title: "Example Media Object", context: @course)
-        @mock_kaltura = double("CanvasKaltura::ClientV3")
+        @mock_kaltura = instance_double(CanvasKaltura::ClientV3)
         allow(CanvasKaltura::ClientV3).to receive(:new).and_return(@mock_kaltura)
         @media_sources = [{
           height: "240",
@@ -2039,6 +2039,40 @@ describe GradebooksController do
             get :show, params: { course_id: @course.id }
             gradebook_env = assigns[:js_env][:GRADEBOOK_OPTIONS]
             expect(gradebook_env[:IMPROVED_LMGB]).to be true
+          end
+        end
+
+        describe "permissions" do
+          describe "allow_assign_to_differentiation_tags" do
+            it "is false when account setting is disabled" do
+              @course.account.settings[:allow_assign_to_differentiation_tags] = { value: false }
+              @course.account.save!
+              get :show, params: { course_id: @course.id }
+              gradebook_env = assigns[:js_env][:GRADEBOOK_OPTIONS]
+              expect(gradebook_env[:permissions][:allow_assign_to_differentiation_tags]).to be false
+            end
+
+            it "is false when account setting is enabled but user lacks manage_tags_add permission" do
+              @course.account.settings[:allow_assign_to_differentiation_tags] = { value: true }
+              @course.account.save!
+              teacher_role = Role.get_built_in_role("TeacherEnrollment", root_account_id: @course.root_account.id)
+              @course.root_account.role_overrides.create!(
+                permission: :manage_tags_add,
+                role: teacher_role,
+                enabled: false
+              )
+              get :show, params: { course_id: @course.id }
+              gradebook_env = assigns[:js_env][:GRADEBOOK_OPTIONS]
+              expect(gradebook_env[:permissions][:allow_assign_to_differentiation_tags]).to be false
+            end
+
+            it "is true when account setting is enabled and user has manage_tags_add permission" do
+              @course.account.settings[:allow_assign_to_differentiation_tags] = { value: true }
+              @course.account.save!
+              get :show, params: { course_id: @course.id }
+              gradebook_env = assigns[:js_env][:GRADEBOOK_OPTIONS]
+              expect(gradebook_env[:permissions][:allow_assign_to_differentiation_tags]).to be true
+            end
           end
         end
 

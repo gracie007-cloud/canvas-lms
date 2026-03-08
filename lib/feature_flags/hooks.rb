@@ -134,13 +134,6 @@ module FeatureFlags
       end
     end
 
-    def self.lti_registrations_discover_page_hook(_user, context, _from_state, transitions)
-      unless context.feature_enabled?(:lti_registrations_page)
-        transitions["on"] ||= {}
-        transitions["on"]["message"] = I18n.t("The LTI Extensions Discover page won't be accessible unless the LTI Registrations page is enabled")
-      end
-    end
-
     def self.assignment_enhancements_prereq_for_stickers_hook(_user, context, _old_state, new_state)
       return if context.feature_allowed?(:assignments_2_student)
 
@@ -189,8 +182,14 @@ module FeatureFlags
       only_admins_can_enable_during_eap(user, context, :a11y_checker, from_state, transitions, allow_subaccount_admins: true)
     end
 
-    def self.oak_flag_visible_on_hook(context)
+    def self.oak_visible_on_hook(context)
       OakPredicate.new(context, Shard.current.database_server.config[:region]).call
+    end
+
+    def self.oak_for_users_visible_on_hook(context)
+      return false unless oak_visible_on_hook(context)
+
+      Oak::PermissionChecker.user_permitted?(context, Account.current_domain_root_account)
     end
 
     # Private helper methods

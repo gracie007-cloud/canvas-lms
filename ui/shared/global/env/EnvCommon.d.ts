@@ -294,6 +294,7 @@ export type SiteAdminFeatureId =
   | 'a11y_checker_ai_table_caption_generation'
   | 'a11y_checker_additional_resources'
   | 'a11y_checker_close_issues'
+  | 'a11y_checker_ga2_features'
   | 'account_calendar_events'
   | 'account_level_blackout_dates'
   | 'courses_popout_sisid'
@@ -312,7 +313,6 @@ export type SiteAdminFeatureId =
   | 'media_links_use_attachment_id'
   | 'multiselect_gradebook_filters'
   | 'new_quizzes_navigation_updates'
-  | 'new_quizzes_surveys'
   | 'permanent_page_links'
   | 'render_both_to_do_lists'
   | 'scheduled_feedback_releases'
@@ -349,8 +349,9 @@ export type RootAccountFeatureId =
   | 'lti_asset_processor'
   | 'lti_asset_processor_discussions'
   | 'lti_link_to_apps_from_developer_keys'
+  | 'lti_deactivate_registrations'
   | 'lti_registrations_next'
-  | 'lti_registrations_page'
+  | 'lti_registrations_templates'
   | 'lti_dr_registrations_update'
   | 'lti_registrations_usage_data'
   | 'lti_registrations_usage_data_dev'
@@ -394,6 +395,7 @@ export type OtherFeatureId =
   | 'canvas_k6_theme'
   | 'new_math_equation_handling'
   | 'lti_asset_processor_course'
+  | 'peer_review_allocation_and_grading'
 
 /**
  * From ApplicationHelper#set_tutorial_js_env
